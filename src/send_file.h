@@ -36,12 +36,12 @@ int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
 			return -1;
 		}
 	}
-	printf("sha1 sums match! =)\n\n");
-	printf("expected \t");
+	fprintf(stderr, "sha1 sums match! =)\n\n");
+	fprintf(stderr, "expected \t");
 	print_sha1(sha1_a);
-	printf(",\ngot \t\t");
+	fprintf(stderr, ",\ngot \t\t");
 	print_sha1(sha1_b);
-	printf(".\n");
+	fprintf(stderr, ".\n");
 	return 1;
 }
 
