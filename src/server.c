@@ -128,7 +128,7 @@ static int recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_s
 	gettimeofday(&tv_end, NULL);
 	double microseconds = (tv_end.tv_sec*1000000 + tv_end.tv_usec) - (tv_beg.tv_sec*1000000 + tv_beg.tv_usec);
 	double seconds = microseconds/1000000;
-	double MBs = file_size/1048576.0;
+	double MBs = (file_size/1048576.0)/seconds;
 
 	fprintf(stderr, "Received %ld bytes in %f seconds (%f MB/s).\n\n", file_size, seconds, MBs);
 
