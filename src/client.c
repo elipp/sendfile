@@ -50,7 +50,7 @@ static int send_file(const char* filename) {
 	memcpy(handshake_buffer + accum, &filesize, sizeof(filesize));
 	accum += sizeof(filesize);
 
-	memcpy(handshake_buffer + accum, filename_base, filename_base_len);
+	strcpy(handshake_buffer + accum, filename_base);
 	accum += filename_base_len + 1;
 
 	memcpy(handshake_buffer + accum, sha1, SHA_DIGEST_LENGTH);
@@ -58,7 +58,7 @@ static int send_file(const char* filename) {
 	int sent_bytes;	
 	sent_bytes = send(local_sockfd, handshake_buffer, accum, 0);
 
-	DUMP_BUFFER(handshake_buffer, accum);
+	//DUMP_BUFFER(handshake_buffer, accum);
 
 	if (sent_bytes < 0) {
 		fprintf(stderr, "sending handshake failed\n");

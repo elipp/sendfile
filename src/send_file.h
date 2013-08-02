@@ -10,11 +10,18 @@ const int port = 51337;
 #define BLESSING_NO 0
 #define BLESSING_YES 1
 
+#define IS_PRINTABLE_CHAR(c) ((unsigned char)(c) >= 0x20 && (unsigned char)(c) <= 0x7E)
+
 #define DUMP_BUFFER(ptr, size) do {\
 	int i = 0;\
 	printf("buffer contents at %p:\n", ptr);\
 	for (; i < size; ++i) {\
-		printf("%02X ", (unsigned char)ptr[i]);\
+		if (IS_PRINTABLE_CHAR(ptr[i])) {\
+			printf("%c  ", (char)(ptr[i]));\
+		}\
+		else {\
+			printf("%02X ", (unsigned char)ptr[i]);\
+		}\
 		if (i % 8 == 7) {\
 			printf("\n");\
 		}\
