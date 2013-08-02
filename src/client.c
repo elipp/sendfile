@@ -27,7 +27,6 @@ static int send_file(const char* filename) {
 
 	unsigned long filesize = st.st_size;
 
-	printf("input file %s filesize: %lu\n", filename, filesize);
 	unsigned char* block = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
 	if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed.\n"); return -1; }
 	
@@ -40,6 +39,9 @@ static int send_file(const char* filename) {
 
 	char *filename_base = basename(filename);
 	int filename_base_len = strlen(filename_base);
+
+	printf("input file %s (basename %s). filesize: %lu\n", filename, filename_base, filesize);
+
 	char handshake_buffer[128];
 	
 	int accum = 0;
@@ -56,6 +58,8 @@ static int send_file(const char* filename) {
 	int sent_bytes;	
 	sent_bytes = send(local_sockfd, handshake_buffer, accum, 0);
 
+	DUMP_BUFFER(handshake_buffer, accum);
+
 	if (sent_bytes < 0) {
 		fprintf(stderr, "sending handshake failed\n");
 	}
@@ -70,8 +74,14 @@ static int send_file(const char* filename) {
 	int blessing;
 	memcpy(&prid, blessing_buffer, sizeof(protocol_id));
 	memcpy(&blessing, blessing_buffer + sizeof(protocol_id), sizeof(blessing));
-	if (prid != protocol_id) { fprintf(stderr, "protocol id mismatch!\n"); return -1; }
-	if (blessing != BLESSING_YES) { fprintf(stderr, "received NAK (BLESSING_NO) (%d) from remote. exiting.\n", blessing); }
+	if (prid != protocol_id) { 
+		fprintf(stderr, "protocol id mismatch!\n"); 
+		return -1; 
+	}
+	if (blessing != BLESSING_YES) { 
+		fprintf(stderr, "received NAK (BLESSING_NO) (%d) from remote. exiting.\n", blessing); 
+		return -1;
+	}
 	
 	// else we're free to start blasting dat file data
 	fprintf(stderr, "Handshake ok. Starting sendfile().\n");

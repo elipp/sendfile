@@ -10,6 +10,18 @@ const int port = 51337;
 #define BLESSING_NO 0
 #define BLESSING_YES 1
 
+#define DUMP_BUFFER(ptr, size) do {\
+	int i = 0;\
+	printf("buffer contents at %p:\n", ptr);\
+	for (; i < size; ++i) {\
+		printf("%02X ", (unsigned char)ptr[i]);\
+		if (i % 8 == 7) {\
+			printf("\n");\
+		}\
+	}\
+	printf("\n");\
+} while(0)
+
 unsigned char *get_sha1(unsigned char* buffer, unsigned long bufsize) {
 	unsigned char *outbuf = malloc(SHA_DIGEST_LENGTH);
 	SHA1(buffer, bufsize, outbuf);

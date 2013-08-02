@@ -32,9 +32,11 @@ typedef struct _HEADERINFO {
 } HEADERINFO;
 
 static char *get_available_filename(const char* orig_filename) {
+	fprintf(stderr, "orig_filename: %s\n", orig_filename);
 	int name_len = strlen(orig_filename);
 	char name_buf[128];
 	strcpy(name_buf, orig_filename);
+	name_buf[strlen(orig_filename)] = '\0';
 	int num = 1;
 	while (access(name_buf, F_OK) != -1) {
 		// file exists, rename using the (#) scheme
@@ -45,17 +47,6 @@ static char *get_available_filename(const char* orig_filename) {
 	return strdup(name_buf);
 }
 
-#define DUMP_BUFFER(ptr, size) do {\
-	int i = 0;\
-	printf("buffer contents at %p:\n", ptr);\
-	for (; i < size; ++i) {\
-		printf("%02X ", (unsigned char)ptr[i]);\
-		if (i % 8 == 7) {\
-			printf("\n");\
-		}\
-	}\
-	printf("\n");\
-}while(0)
 
 static int get_headerinfo(const char* buf, size_t buf_size, HEADERINFO *h) {
 	memset(h, 0, sizeof(HEADERINFO));
