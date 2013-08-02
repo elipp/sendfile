@@ -38,7 +38,8 @@ static char *get_available_filename(const char* orig_filename) {
 	int num = 1;
 	while (access(name_buf, F_OK) != -1) {
 		// file exists, rename using the (#) scheme
-		sprintf(name_buf, "%s(%d)", orig_filename, num);
+		int bytes = sprintf(name_buf, "%s(%d)", orig_filename, num);
+		name_buf[bytes] = '\0';
 		++num;
 	}
 	return strdup(name_buf);
@@ -100,7 +101,8 @@ static int recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_s
 	gettimeofday(&tv_beg, NULL);
 
 	while (total_bytes_processed < file_size) {
-		static const int max_chunksize = 16384;
+//		static const int max_chunksize = 16384;
+		static const int max_chunksize = 65536;
 		long would_process = file_size - total_bytes_processed;
 		long gonna_process = MIN(would_process, max_chunksize);
 		int spl_flag = SPLICE_F_MORE | SPLICE_F_MOVE;
