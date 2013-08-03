@@ -9,12 +9,15 @@
 #include <stdio.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <pthread.h>
 
-#define __USE_GNU
+#define __USE_GNU // for splice constants, SPLICE_F_MOVE, SPLICE_F_MORE
 #include <fcntl.h>
 #include "send_file.h"
 
-int local_sockfd;
+static int local_sockfd = -1;
+static int allow_checksum_skip_flag = 0;
+static int always_accept_flag = 0;
 
 static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
 	int id;
@@ -45,15 +48,18 @@ static int get_headerinfo(const char* buf, size_t buf_size, HEADERINFO *h) {
 	memcpy(&h->protocol_id, buf, sizeof(h->protocol_id));
 	accum += sizeof(h->protocol_id);
 
-	memcpy(&h->output_filesize, buf + accum, sizeof(h->output_filesize));
-	accum += sizeof(h->output_filesize);
+	memcpy(&h->filesize, buf + accum, sizeof(h->filesize));
+	accum += sizeof(h->filesize);
 
-	h->output_filename = strdup(buf + accum);
-	if (!h->output_filename) { 
+	memcpy(&h->sha1_included, buf+accum, sizeof(h->sha1_included));
+	accum += sizeof(h->sha1_included);
+
+	h->filename = strdup(buf + accum);
+	if (!h->filename) { 
 		fprintf(stderr, "Error: extracting file name from header info failed. Bad header?\n");
 		return -1;
 	}
-	int name_len = strlen(h->output_filename);
+	int name_len = strlen(h->filename);
 	accum += name_len + 1;
 	memcpy(&h->sha1[0], buf + accum, SHA_DIGEST_LENGTH);
 
@@ -73,27 +79,83 @@ static int consolidate(int out_sockfd, int flag) {
 	return 0;
 }
 
-static int recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_size) {
-	long bytes_recv = 0;
+static double get_us(const struct timeval *beg) {
+	struct timeval end;
+	memset(&end, 0, sizeof(end));
+	gettimeofday(&end, NULL);
+	double microseconds = (end.tv_sec*1000000 + end.tv_usec) - (beg->tv_sec*1000000 + beg->tv_usec);
+	return microseconds;
+}
+
+typedef struct _progress_struct {
+	const long *cur_bytes;
+	const long *total_bytes;
+	const struct timeval *beg;
+} progress_struct;
+
+static void print_progress(long cur_bytes, long total_bytes, const struct timeval *beg) {
+	
+	static const char* esc_composite_clear_line_reset_left = "\r\033[0K";	// ANSI X3.64 magic
+	fprintf(stderr, "%s", esc_composite_clear_line_reset_left);
+
+	float progress = 100*(float)(cur_bytes)/(float)(total_bytes);
+
+	// MB/s = (bytes/2^20) : (microseconds/1000000)
+	// == (bytes/1048576) * (1000000/microseconds)
+	// == (1000000/1048576) * (bytes/microseconds)
+	static const float MB_us_coeff = 1000000.0/1048576.0;
+
+	float rate = MB_us_coeff*((float)cur_bytes)/get_us(beg);	
+	fprintf(stderr, "%lu/%lu bytes received (%.2f %%, %.2f MB/s)", cur_bytes, total_bytes, progress, rate);
+
+}
+
+void *progress_callback(void *progress) {
+
+	progress_struct *p = (progress_struct*)progress;
+
+	while (*p->cur_bytes < *p->total_bytes) {
+		long cur_bytes = *p->cur_bytes;
+		long total_bytes = *p->total_bytes;
+		print_progress(cur_bytes, total_bytes, p->beg);
+		sleep(1);
+	}
+	
+	return NULL;
+}
+
+static long recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_size) {
 	long total_bytes_processed = 0;	
-	struct timeval tv_beg, tv_end;
+	struct timeval tv_beg;
 	memset(&tv_beg, 0, sizeof(tv_beg));
-	memset(&tv_end, 0, sizeof(tv_end));
 	gettimeofday(&tv_beg, NULL);
+
+	progress_struct p;
+
+	p.cur_bytes = &total_bytes_processed;
+	p.total_bytes = &file_size;
+	p.beg = &tv_beg;
+	pthread_t t1;
+	pthread_create(&t1, NULL, progress_callback, (void*)&p);
 
 	while (total_bytes_processed < file_size) {
 		static const int max_chunksize = 16384;
+		static const int spl_flag = SPLICE_F_MORE | SPLICE_F_MOVE;
+
+		long bytes_recv = 0;
+		long bytes = 0;
+
 		long would_process = file_size - total_bytes_processed;
-		long gonna_process = MIN(would_process, max_chunksize);
-		int spl_flag = SPLICE_F_MORE | SPLICE_F_MOVE;
+	       	long gonna_process = MIN(would_process, max_chunksize);
 
 		// splice to pipe write head
-		if ((bytes_recv = 
+		if ((bytes = 
 		splice(remote_sockfd, NULL, pipefd[1], NULL, gonna_process, spl_flag)) <= 0) {
 			fprintf(stderr, "socket->pipe_write splice returned %ld: %s\n", bytes_recv, strerror(errno));
 			return -1;
 		}
 		// splice from pipe read head to file fd
+		bytes_recv += bytes;
 
 		int bytes_in_pipe = bytes_recv;
 		int bytes_written = 0;
@@ -107,16 +169,20 @@ static int recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_s
 			bytes_in_pipe -= bytes_written;
 
 		}
-	}			
-	
-	gettimeofday(&tv_end, NULL);
-	double microseconds = (tv_end.tv_sec*1000000 + tv_end.tv_usec) - (tv_beg.tv_sec*1000000 + tv_beg.tv_usec);
-	double seconds = microseconds/1000000;
-	double MBs = get_megabytes(file_size)/seconds;
+	}
+	if (total_bytes_processed != file_size) {
+		fprintf(stderr, "warning: total_bytes_processed != file_size!\n");
+	}
 
-	fprintf(stderr, "Received %ld bytes in %f seconds (%f MB/s).\n\n", file_size, seconds, MBs);
+	pthread_join(t1, NULL);
+	print_progress(total_bytes_processed, file_size, &tv_beg);
 
-	return 1;
+	double seconds = get_us(&tv_beg)/1000000.0;
+	double MBs = get_megabytes(total_bytes_processed)/seconds;
+
+	fprintf(stderr, "\nReceived %.2f MB in %.3f seconds (%.2f MB/s).\n\n", get_megabytes(total_bytes_processed), seconds, MBs);
+
+	return total_bytes_processed;
 
 }
 
@@ -153,12 +219,53 @@ get_answer:
 	}
 	else { 
 		fprintf(stderr, "Unknown answer \"%s\". [y/N]?", buffer);
-		goto get_answer; 
+		goto get_answer; // ;)
 	} 
 
 }
 
+static void cleanup() {
+	close(local_sockfd);
+}
+
+void signal_handler(int sig) {
+	if (sig == SIGINT) {
+		fprintf(stderr, "Received SIGINT. Aborting.\n");
+		cleanup();
+		exit(1);
+	}
+}
+
 int main(int argc, char* argv[]) {
+
+	int c;
+	while ((c = getopt(argc, argv, "ac")) != -1) {
+		switch(c) {
+			case 'a':
+				fprintf(stderr, "-a provided -> always accepting file transfers without asking for consent.\n");
+				always_accept_flag = 1;
+				break;
+	
+			case 'c':
+				fprintf(stderr, "-c provided -> allowing program to skip checksum verification.\n");
+				allow_checksum_skip_flag = 1;
+				break;
+			case '?':
+				fprintf(stderr, "warning: unknown option \'-%c\n\'", optopt);
+				break;
+			default:
+				abort();
+		}
+	}
+	
+	struct sigaction new_action, old_action;
+	new_action.sa_handler = signal_handler;
+	sigemptyset(&new_action.sa_mask);
+	new_action.sa_flags = 0;
+	sigaction(SIGINT, NULL, &old_action);
+	if (old_action.sa_handler != SIG_IGN) {
+		sigaction(SIGINT, &new_action, NULL);
+	}
 
 	struct sockaddr_in local_saddr, remote_saddr;
 
@@ -179,9 +286,10 @@ int main(int argc, char* argv[]) {
 		fprintf(stderr, "bind() failed: %s\n", strerror(errno));
 		return 1;
 	}
+	fprintf(stderr, "send_file server.\n");
 
-	fprintf(stdout, "sendfile_server: bind() on port %d.\n", port);
-
+	print_ip_addresses();
+	fprintf(stdout, "bind() on port %d.\n", port);
 	listen(local_sockfd, 5);
 
 	char handshake_buffer[128];
@@ -225,6 +333,12 @@ int main(int argc, char* argv[]) {
 			goto cleanup;
 		}
 
+		if (h.sha1_included == 0 && allow_checksum_skip_flag == 0) {
+			fprintf(stderr, "error: client didn't provide a sha1 hash for the input file (-c was used; use -c on the server to allow this). Rejecting.\n");
+			consolidate(remote_sockfd, HANDSHAKE_CHECKSUM_REQUIRED);
+			goto cleanup;
+		}
+
 		int pipefd[2];
 
 		if (pipe(pipefd) < 0) {
@@ -233,11 +347,15 @@ int main(int argc, char* argv[]) {
 			goto cleanup;
 		}
 
-		char *name = get_available_filename(h.output_filename);
-		fprintf(stderr, "The client wants to send the file %s (size %.2f MB).\n", h.output_filename, get_megabytes(h.output_filesize)); 
-		if (!ask_user_consent()) { consolidate(remote_sockfd, HANDSHAKE_DENIED); goto cleanup; }
+		char *name = get_available_filename(h.filename);
 
-		fprintf(stderr, "Writing to output file %s\n", name);
+		fprintf(stderr, "The client wants to send the file %s (size %.2f MB).\n", h.filename, get_megabytes(h.filesize)); 
+
+		if (always_accept_flag == 0) {
+			if (!ask_user_consent()) { consolidate(remote_sockfd, HANDSHAKE_DENIED); goto cleanup; }
+		}
+
+		fprintf(stderr, "Writing to output file %s.\n\n", name);
 		outfile_fd = open(name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 		free(name);
 
@@ -250,33 +368,48 @@ int main(int argc, char* argv[]) {
 		// inform the client program that they can start blasting dat file data
 		consolidate(remote_sockfd, HANDSHAKE_OK);
 
-		if (recv_file(remote_sockfd, pipefd, outfile_fd, h.output_filesize) < 0) {
-			fprintf(stderr, "recv_file failure.\n");
+		long ret;
+		if ((ret = recv_file(remote_sockfd, pipefd, outfile_fd, h.filesize)) < h.filesize) {
+			if (ret < 0) {
+				fprintf(stderr, "recv_file failure.\n");
+			}
+			else {
+				fprintf(stderr, "recv_file: warning: received data size (%ld) is less than expected (%lu)!\n", ret, h.filesize);
+			}
 			goto cleanup;
 		}
 		
-		unsigned char* block = mmap(NULL, h.output_filesize, PROT_READ, MAP_SHARED, outfile_fd, 0);
+		unsigned char* block = mmap(NULL, h.filesize, PROT_READ, MAP_SHARED, outfile_fd, 0);
 		if (block == MAP_FAILED) {
 			fprintf(stderr, "mmap on outfile_fd failed: %s.\n", strerror(errno));
 			return 1;
 		}
 
-		fprintf(stderr, "Calculating sha1 sum...\n\n");
-		unsigned char* sha1_received = get_sha1(block, h.output_filesize);
-		munmap(block, h.output_filesize);
-		
-		if (compare_sha1(h.sha1, sha1_received) < 0) {
-			return 1;
-		}
+		if (h.sha1_included && allow_checksum_skip_flag == 0) {
+			fprintf(stderr, "Calculating sha1 sum...\n\n");
+			unsigned char* sha1_received = get_sha1(block, h.filesize);
+			munmap(block, h.filesize);
+			
+			if (compare_sha1(h.sha1, sha1_received) < 0) {
+				return 1;
+			}
 
-		free(sha1_received);
-		free(h.output_filename);
+			free(sha1_received);
+		}
+		else {
+			fprintf(stderr, "(skipping checksum verification)\n\n");
+		}
+		fprintf(stderr, "Success. ");
+
+		free(h.filename);
 
 	cleanup:
 		close(remote_sockfd);
 		close(outfile_fd);
 
 	}
+
+	cleanup();
 
 	return 0;
 }

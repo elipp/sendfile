@@ -6,6 +6,10 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <signal.h>
 
 const int protocol_id = 0x0d355480;
 
@@ -14,13 +18,40 @@ const int port = 51337;
 #define HANDSHAKE_FAIL 0
 #define HANDSHAKE_OK 1
 #define HANDSHAKE_DENIED 2
+#define HANDSHAKE_CHECKSUM_REQUIRED 3
+
+#define SHA1_NOT_INCLUDED 0
+#define SHA1_INCLUDED 1
 
 typedef struct _HEADERINFO {
 	int protocol_id;
-	unsigned long output_filesize;
-	char *output_filename;
+	unsigned long filesize;
+	char *filename;
+	int sha1_included;
 	unsigned char sha1[SHA_DIGEST_LENGTH];
 } HEADERINFO;
+
+void print_ip_addresses() {
+
+	struct ifaddrs *addrs = NULL;
+	struct ifaddrs *addrs_iter = NULL;
+
+	getifaddrs(&addrs);
+
+	fprintf(stderr, "IP addresses for local interfaces via getifaddrs (local loopback lo excluded):\n");
+	char ip_buf[INET_ADDRSTRLEN];	
+	for (addrs_iter = addrs; addrs_iter != NULL; addrs_iter = addrs_iter->ifa_next) {
+		if (addrs_iter->ifa_addr->sa_family == AF_INET) {	// the other option would be AF_INET6, but never mind 
+			if (strcmp(addrs_iter->ifa_name, "lo") == 0) { continue; } // we don't really care about local loopback here
+			inet_ntop(AF_INET, &((struct sockaddr_in *)addrs_iter->ifa_addr)->sin_addr, ip_buf, INET_ADDRSTRLEN);
+			fprintf(stderr, "interface %s ip: %s\n", addrs_iter->ifa_name, ip_buf);
+		} 
+	}
+	if (addrs != NULL) { 
+		freeifaddrs(addrs);
+       	}
+
+}
 
 #define IS_PRINTABLE_CHAR(c) ((unsigned char)(c) >= 0x20 && (unsigned char)(c) <= 0x7E)
 
@@ -32,7 +63,7 @@ typedef struct _HEADERINFO {
 			printf("%c  ", (char)(ptr[i]));\
 		}\
 		else {\
-			printf("%02X ", (unsigned char)ptr[i]);\
+			printf("%02x ", (unsigned char)ptr[i]);\
 		}\
 		if (i % 8 == 7) {\
 			printf("\n");\
@@ -76,7 +107,7 @@ int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
 	print_sha1(sha1_a);
 	fprintf(stderr, ",\ngot \t\t");
 	print_sha1(sha1_b);
-	fprintf(stderr, ".\n");
+	fprintf(stderr, ".\n\n");
 	return 1;
 }
 

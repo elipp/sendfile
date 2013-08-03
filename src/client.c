@@ -15,7 +15,24 @@
 
 #include "send_file.h"
 
-int local_sockfd;
+static int local_sockfd;
+static int checksum_flag = 1;
+
+#define ACCUM_WRITE(var, buffer) do {\
+	memcpy((buffer)+accum, &(var), sizeof(var));\
+	accum += sizeof(var);\
+} while (0)
+
+#define ACCUM_WRITE_SIZE(var, buffer, size) do {\
+	memcpy((buffer)+accum, &(var), (size));\
+	accum += size;\
+} while (0)
+
+#define ACCUM_WRITE_ARRAY(arr_ptr, buffer, num_elements) do {\
+	memcpy((buffer)+accum, (arr_ptr), num_elements*sizeof(*(arr_ptr)));\
+	accum += num_elements*sizeof(*(arr_ptr));\
+} while(0)
+
 
 static int send_file(char* filename) {
 
@@ -26,16 +43,23 @@ static int send_file(char* filename) {
 	fstat(fd, &st);
 
 	unsigned long filesize = st.st_size;
+	unsigned char *sha1 = NULL;
 
-	unsigned char* block = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-	if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed.\n"); return -1; }
 	
-	fprintf(stderr, "Calculating sha1 sum of input file...\n");
-	unsigned char* sha1 = get_sha1(block, filesize);
-	munmap(block, filesize);
-	fprintf(stderr, "Done (got ");
-	print_sha1(sha1);
-	fprintf(stderr, ").\n");
+	if (!checksum_flag) {
+		fprintf(stderr, "(skipping checksum calculation)\n");
+	}
+	else {
+		unsigned char* block = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+		if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed.\n"); return -1; }
+		fprintf(stderr, "Calculating sha1 sum of input file...\n");
+		sha1 = get_sha1(block, filesize);
+		munmap(block, filesize);
+
+		fprintf(stderr, "Done! (got ");
+		print_sha1(sha1);
+		fprintf(stderr, ").\n");
+	}
 
 	char *filename_base = basename(filename);
 	int filename_base_len = strlen(filename_base);
@@ -45,16 +69,16 @@ static int send_file(char* filename) {
 	char handshake_buffer[128];
 	
 	int accum = 0;
-	memcpy(handshake_buffer, &protocol_id, sizeof(protocol_id));
-	accum += sizeof(protocol_id);
-	memcpy(handshake_buffer + accum, &filesize, sizeof(filesize));
-	accum += sizeof(filesize);
+	ACCUM_WRITE(protocol_id, handshake_buffer);
+	ACCUM_WRITE(filesize, handshake_buffer);
+	ACCUM_WRITE(checksum_flag, handshake_buffer);
+	ACCUM_WRITE_ARRAY(filename_base, handshake_buffer, filename_base_len+1); // to include the \0 char
+	if (checksum_flag) {
+		ACCUM_WRITE_ARRAY(sha1, handshake_buffer, SHA_DIGEST_LENGTH);
+	}
 
-	strcpy(handshake_buffer + accum, filename_base);
-	accum += filename_base_len + 1;
+//	DUMP_BUFFER(handshake_buffer, accum);
 
-	memcpy(handshake_buffer + accum, sha1, SHA_DIGEST_LENGTH);
-	accum += SHA_DIGEST_LENGTH;
 	int sent_bytes;	
 	sent_bytes = send(local_sockfd, handshake_buffer, accum, 0);
 
@@ -65,6 +89,7 @@ static int send_file(char* filename) {
 
 	int received_bytes;
 
+	fprintf(stderr, "Waiting for remote consent...");
 	received_bytes = recv(local_sockfd, handshake_buffer, 8, 0); 
 	if (received_bytes <= 0) { fprintf(stderr, "recv: blessing length <= 0\n"); return -1; }
 	int prid;
@@ -77,6 +102,7 @@ static int send_file(char* filename) {
 	}
 	switch (handshake_status) {
 		case HANDSHAKE_OK:
+			fprintf(stderr, "ok.\n");
 			break;
 		case HANDSHAKE_FAIL:
 			fprintf(stderr, "received HANDSHAKE_FAIL (%x) from remote. exiting.\n", handshake_status); 
@@ -86,14 +112,22 @@ static int send_file(char* filename) {
 			fprintf(stderr, "received HANDSHAKE_DENIED (%x) from remote.\n", handshake_status);
 			return -1;
 			break;
+		case HANDSHAKE_CHECKSUM_REQUIRED:
+			fprintf(stderr, "received HANDSHAKE_CHECKSUM_REQUIRED (%x) from remote (the -c option can't be used).\n", handshake_status);
+			return -1;
 		default:
 			break;
 	}
 	
-	// else we're free to start blasting dat file data
-	fprintf(stderr, "Handshake ok. Starting sendfile().\n");
-	if ((sent_bytes = sendfile(local_sockfd, fd, 0, filesize)) <= 0) {
-		fprintf(stderr, "sendfile() failed: %s\n", strerror(errno)); 
+	// else we're free to start blasting ze file data
+	fprintf(stderr, "Handshake ok. Starting sendfile().\nProgress data unavailable - use an external program, such as NetHogs.\n");
+	if ((sent_bytes = sendfile(local_sockfd, fd, 0, filesize)) < filesize) {
+		if (sent_bytes < 0) {
+			fprintf(stderr, "sendfile() failed: %s\n", strerror(errno)); 
+		}
+		else {
+			fprintf(stderr, "sent_bytes < filesize (!), transfer cancelled by remote.\n");
+		}
 		return -1;
 	}
 	fprintf(stderr, "sendfile() successful.\n");
@@ -104,19 +138,36 @@ static int send_file(char* filename) {
 	free(sha1);
 }
 
-
+void usage(char* argv[]) {
+	fprintf(stderr, "%s: usage: %s <IPv4 addr> <filename>.\n Options: \t-c:\tskip checksum (sha1) calculation (requires server-side support)\n\n", argv[0], argv[0]);
+}
 
 int main(int argc, char* argv[]) {
 
 	if (argc < 3) {
-		fprintf(stderr, "send_file usage: send_file RECIPIENT_IP FILENAME\n");
+		usage(argv);
 		return 1;
+	}
+
+	int c;
+	while ((c = getopt(argc, argv, "c")) != -1) {
+		switch(c) {
+			case 'c':
+				fprintf(stderr, "-c provided -> Skipping checksum computation.\n");
+				checksum_flag = 0;
+				break;
+			case '?':
+				fprintf(stderr, "warning: unknown option \'-%c\n\'", optopt);
+				break;
+			default:
+				abort();
+		}
 	}
 	
 	// send_file RECIPIENT_IP FILENAME
 
-	char* remote_ipstr = strdup(argv[1]);
-	char* filename = strdup(argv[2]);
+	char* remote_ipstr = strdup(argv[optind]);
+	char* filename = strdup(argv[optind+1]);
 
 	struct sockaddr_in local_saddr, remote_saddr;
 	memset(&local_saddr, 0, sizeof(local_saddr));
@@ -139,7 +190,7 @@ int main(int argc, char* argv[]) {
 	socklen_t remote_saddr_len = sizeof(remote_saddr);
 
 	if (connect(local_sockfd, (struct sockaddr*) &remote_saddr, remote_saddr_len) < 0) {
-		fprintf(stderr, "connect() failed.\n");
+		fprintf(stderr, "connect failed: %s\n", strerror(errno));
 		return 1;
 	}
 
