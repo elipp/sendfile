@@ -25,7 +25,6 @@ static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
 }
 
 static char *get_available_filename(const char* orig_filename) {
-	int name_len = strlen(orig_filename);
 	char name_buf[128];
 	strcpy(name_buf, orig_filename);
 	name_buf[strlen(orig_filename)] = '\0';
@@ -91,7 +90,7 @@ static int recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_s
 		// splice to pipe write head
 		if ((bytes_recv = 
 		splice(remote_sockfd, NULL, pipefd[1], NULL, gonna_process, spl_flag)) <= 0) {
-			fprintf(stderr, "socket->pipe_write splice returned %d: %s\n", bytes_recv, strerror(errno));
+			fprintf(stderr, "socket->pipe_write splice returned %ld: %s\n", bytes_recv, strerror(errno));
 			return -1;
 		}
 		// splice from pipe read head to file fd
@@ -189,7 +188,10 @@ int main(int argc, char* argv[]) {
 
 	while (1) {
 		fprintf(stderr, "\nListening for incoming connections.\n");
-		int remote_sockfd;
+
+		int remote_sockfd = -1;
+		int outfile_fd = -1;
+
 		socklen_t remote_saddr_size = sizeof(remote_saddr);
 		remote_sockfd = accept(local_sockfd, (struct sockaddr *) &remote_saddr, &remote_saddr_size);
 		if (remote_sockfd < 0) {
@@ -197,7 +199,7 @@ int main(int argc, char* argv[]) {
 		}
 
 		char ip_buf[32];
-		char *ipstr = inet_ntop(AF_INET, &(remote_saddr.sin_addr), ip_buf, sizeof(ip_buf));
+		inet_ntop(AF_INET, &(remote_saddr.sin_addr), ip_buf, sizeof(ip_buf));
 		printf("Client connected from %s.\n", ip_buf);
 
 		int received_bytes = 0;	
@@ -223,7 +225,6 @@ int main(int argc, char* argv[]) {
 			goto cleanup;
 		}
 
-		int outfile_fd;
 		int pipefd[2];
 
 		if (pipe(pipefd) < 0) {

@@ -2,6 +2,10 @@
 #define SEND_FILE_H
 
 #include <openssl/sha.h>
+#include <ctype.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 
 const int protocol_id = 0x0d355480;
 
