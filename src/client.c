@@ -138,24 +138,27 @@ static int send_file(char* filename) {
 	free(sha1);
 }
 
-void usage(char* argv[]) {
-	fprintf(stderr, "%s: usage: %s <IPv4 addr> <filename>.\n Options: \t-c:\tskip checksum (sha1) calculation (requires server-side support)\n\n", argv[0], argv[0]);
+void usage() {
+	fprintf(stderr, "send_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>.\n Options:\n -c:\tskip checksum (sha1) verification (requires server-side support)\n -h\tdisplay this help and exit.\n\n");
 }
 
 int main(int argc, char* argv[]) {
 
 	if (argc < 3) {
-		usage(argv);
+		usage();
 		return 1;
 	}
 
 	int c;
-	while ((c = getopt(argc, argv, "c")) != -1) {
+	while ((c = getopt(argc, argv, "ch")) != -1) {
 		switch(c) {
 			case 'c':
 				fprintf(stderr, "-c provided -> Skipping checksum computation.\n");
 				checksum_flag = 0;
 				break;
+			case 'h':
+				usage();
+				return 0;
 			case '?':
 				fprintf(stderr, "warning: unknown option \'-%c\n\'", optopt);
 				break;

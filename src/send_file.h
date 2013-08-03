@@ -13,7 +13,8 @@
 
 const int protocol_id = 0x0d355480;
 
-const int port = 51337;
+#define DEFAULT_PORT 51337
+int port = DEFAULT_PORT;
 
 #define HANDSHAKE_FAIL 0
 #define HANDSHAKE_OK 1
@@ -38,7 +39,7 @@ void print_ip_addresses() {
 
 	getifaddrs(&addrs);
 
-	fprintf(stderr, "IP addresses for local interfaces via getifaddrs (local loopback lo excluded):\n");
+	fprintf(stderr, "IP addresses for local interfaces via getifaddrs (local loopback lo excluded):\n\n");
 	char ip_buf[INET_ADDRSTRLEN];	
 	for (addrs_iter = addrs; addrs_iter != NULL; addrs_iter = addrs_iter->ifa_next) {
 		if (addrs_iter->ifa_addr->sa_family == AF_INET) {	// the other option would be AF_INET6, but never mind 

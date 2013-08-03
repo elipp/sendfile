@@ -89,7 +89,7 @@ static double get_us(const struct timeval *beg) {
 
 typedef struct _progress_struct {
 	const long *cur_bytes;
-	const long *total_bytes;
+	long total_bytes;
 	const struct timeval *beg;
 } progress_struct;
 
@@ -114,9 +114,9 @@ void *progress_callback(void *progress) {
 
 	progress_struct *p = (progress_struct*)progress;
 
-	while (*p->cur_bytes < *p->total_bytes) {
+	while (*p->cur_bytes < p->total_bytes) {
 		long cur_bytes = *p->cur_bytes;
-		long total_bytes = *p->total_bytes;
+		long total_bytes = p->total_bytes;
 		print_progress(cur_bytes, total_bytes, p->beg);
 		sleep(1);
 	}
@@ -133,7 +133,7 @@ static long recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_
 	progress_struct p;
 
 	p.cur_bytes = &total_bytes_processed;
-	p.total_bytes = &file_size;
+	p.total_bytes = file_size;
 	p.beg = &tv_beg;
 	pthread_t t1;
 	pthread_create(&t1, NULL, progress_callback, (void*)&p);
@@ -236,10 +236,14 @@ void signal_handler(int sig) {
 	}
 }
 
+void usage() {
+	fprintf(stderr, "send_file_server usage:  send_file_server [[ OPTIONS ]]\nOptions:\n -c\t\tallow program to skip checksum verification\n -p PORTNUM\tspecify port (default 51337)\n -h\t\tdisplay this help and exit.\n");
+}
+
 int main(int argc, char* argv[]) {
 
 	int c;
-	while ((c = getopt(argc, argv, "ac")) != -1) {
+	while ((c = getopt(argc, argv, "ahcp:")) != -1) {
 		switch(c) {
 			case 'a':
 				fprintf(stderr, "-a provided -> always accepting file transfers without asking for consent.\n");
@@ -249,6 +253,17 @@ int main(int argc, char* argv[]) {
 			case 'c':
 				fprintf(stderr, "-c provided -> allowing program to skip checksum verification.\n");
 				allow_checksum_skip_flag = 1;
+				break;
+			case 'h':
+				usage();
+				return 0;
+				break;
+			case 'p':
+				port = atoi(optarg);
+				if (port == 0) {
+					fprintf(stderr, "Invalid port %s, attempting to use default port %d instead.\n", optarg, DEFAULT_PORT);
+					port = DEFAULT_PORT;
+				}
 				break;
 			case '?':
 				fprintf(stderr, "warning: unknown option \'-%c\n\'", optopt);
@@ -286,8 +301,8 @@ int main(int argc, char* argv[]) {
 		fprintf(stderr, "bind() failed: %s\n", strerror(errno));
 		return 1;
 	}
-	fprintf(stderr, "send_file server.\n");
 
+	fprintf(stderr, "send_file_server (recipient)\n\n");
 	print_ip_addresses();
 	fprintf(stdout, "bind() on port %d.\n", port);
 	listen(local_sockfd, 5);
@@ -352,7 +367,10 @@ int main(int argc, char* argv[]) {
 		fprintf(stderr, "The client wants to send the file %s (size %.2f MB).\n", h.filename, get_megabytes(h.filesize)); 
 
 		if (always_accept_flag == 0) {
-			if (!ask_user_consent()) { consolidate(remote_sockfd, HANDSHAKE_DENIED); goto cleanup; }
+			if (!ask_user_consent()) { 
+				consolidate(remote_sockfd, HANDSHAKE_DENIED); 
+				goto cleanup; 
+			}
 		}
 
 		fprintf(stderr, "Writing to output file %s.\n\n", name);
