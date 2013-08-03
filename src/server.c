@@ -24,15 +24,7 @@ static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
 	return 0;
 }
 
-typedef struct _HEADERINFO {
-	int protocol_id;
-	unsigned long output_filesize;
-	char *output_filename;
-	unsigned char sha1[SHA_DIGEST_LENGTH];
-} HEADERINFO;
-
 static char *get_available_filename(const char* orig_filename) {
-	fprintf(stderr, "orig_filename: %s\n", orig_filename);
 	int name_len = strlen(orig_filename);
 	char name_buf[128];
 	strcpy(name_buf, orig_filename);
@@ -71,15 +63,14 @@ static int get_headerinfo(const char* buf, size_t buf_size, HEADERINFO *h) {
 
 }	
 
-static int send_blessing(int out_sockfd, int flag) {
+static int consolidate(int out_sockfd, int flag) {
 	char hacknowledge_buffer[8];
 	memcpy(hacknowledge_buffer, &protocol_id, sizeof(protocol_id));
 	memcpy(hacknowledge_buffer+sizeof(protocol_id), &flag, sizeof(flag));	
 	int sent_bytes = send(out_sockfd, hacknowledge_buffer, 8, 0);
 	if (sent_bytes <= 0) { 
-		fprintf(stderr, "send_blessing failed (send())\n");
+		fprintf(stderr, "consolidate failed (send()): %s\n", strerror(errno));
 	}
-	fprintf(stdout, "sent blessing %d to remote.\n", flag);
 	return 0;
 }
 
@@ -118,14 +109,53 @@ static int recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_s
 
 		}
 	}			
+	
 	gettimeofday(&tv_end, NULL);
 	double microseconds = (tv_end.tv_sec*1000000 + tv_end.tv_usec) - (tv_beg.tv_sec*1000000 + tv_beg.tv_usec);
 	double seconds = microseconds/1000000;
-	double MBs = (file_size/1048576.0)/seconds;
+	double MBs = get_megabytes(file_size)/seconds;
 
 	fprintf(stderr, "Received %ld bytes in %f seconds (%f MB/s).\n\n", file_size, seconds, MBs);
 
 	return 1;
+
+}
+
+static void make_lowercase(char *arr, int length) {
+	int i = 0;
+	for (; i < length; ++i) {
+		arr[i] = tolower(arr[i]);
+	}
+}
+
+static int ask_user_consent() {
+	fprintf(stderr, "Is this ok? [y/N] ");
+	char buffer[128];
+	buffer[127] = '\0';
+	int index;
+	char c;
+get_answer:
+	index = 0;
+	while ((c = getchar()) != '\n') {
+		buffer[index] = c;
+		if (index < 127) {
+			++index;
+		}
+	}
+	
+	buffer[index] = '\0';
+	make_lowercase(buffer, index);
+
+	if (strcmp(buffer, "y") == 0) {
+		return 1;
+	}
+	else if (strcmp(buffer, "n") == 0) {
+		return 0;
+	}
+	else { 
+		fprintf(stderr, "Unknown answer \"%s\". [y/N]?", buffer);
+		goto get_answer; 
+	} 
 
 }
 
@@ -158,6 +188,7 @@ int main(int argc, char* argv[]) {
 	char handshake_buffer[128];
 
 	while (1) {
+		fprintf(stderr, "\nListening for incoming connections.\n");
 		int remote_sockfd;
 		socklen_t remote_saddr_size = sizeof(remote_saddr);
 		remote_sockfd = accept(local_sockfd, (struct sockaddr *) &remote_saddr, &remote_saddr_size);
@@ -166,7 +197,7 @@ int main(int argc, char* argv[]) {
 		}
 
 		char ip_buf[32];
-		char *ipstr = inet_ntop(AF_INET, &remote_saddr.sin_addr, ip_buf, 32);
+		char *ipstr = inet_ntop(AF_INET, &(remote_saddr.sin_addr), ip_buf, sizeof(ip_buf));
 		printf("Client connected from %s.\n", ip_buf);
 
 		int received_bytes = 0;	
@@ -180,7 +211,7 @@ int main(int argc, char* argv[]) {
 
 		if (validate_protocol_welcome_header(handshake_buffer, handshake_len) < 0) {
 			fprintf(stderr, "warning: validate_protocol_welcome_header failed!\n");
-			send_blessing(remote_sockfd, BLESSING_NO);
+			consolidate(remote_sockfd, HANDSHAKE_FAIL);
 			goto cleanup;
 		}
 
@@ -188,7 +219,7 @@ int main(int argc, char* argv[]) {
 
 		if (get_headerinfo(handshake_buffer, handshake_len, &h) < 0) {
 			fprintf(stderr, "error: headerinfo error!\n");
-			send_blessing(remote_sockfd, BLESSING_NO);
+			consolidate(remote_sockfd, HANDSHAKE_FAIL);
 			goto cleanup;
 		}
 
@@ -197,23 +228,26 @@ int main(int argc, char* argv[]) {
 
 		if (pipe(pipefd) < 0) {
 			fprintf(stderr, "pipe() error.\n");
-			send_blessing(remote_sockfd, BLESSING_NO);
+			consolidate(remote_sockfd, HANDSHAKE_FAIL);
 			goto cleanup;
 		}
 
 		char *name = get_available_filename(h.output_filename);
-		printf("Writing to output file %s\n", name);
+		fprintf(stderr, "The client wants to send the file %s (size %.2f MB).\n", h.output_filename, get_megabytes(h.output_filesize)); 
+		if (!ask_user_consent()) { consolidate(remote_sockfd, HANDSHAKE_DENIED); goto cleanup; }
+
+		fprintf(stderr, "Writing to output file %s\n", name);
 		outfile_fd = open(name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 		free(name);
 
 		if (outfile_fd < 0) {
 			fprintf(stderr, "open() failed (errno: %s).\n", strerror(errno));
-			send_blessing(remote_sockfd, BLESSING_NO);
+			consolidate(remote_sockfd, HANDSHAKE_FAIL);
 			goto cleanup;
 		}
 
 		// inform the client program that they can start blasting dat file data
-		send_blessing(remote_sockfd, BLESSING_YES);
+		consolidate(remote_sockfd, HANDSHAKE_OK);
 
 		if (recv_file(remote_sockfd, pipefd, outfile_fd, h.output_filesize) < 0) {
 			fprintf(stderr, "recv_file failure.\n");

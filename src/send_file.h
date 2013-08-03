@@ -7,8 +7,16 @@ const int protocol_id = 0x0d355480;
 
 const int port = 51337;
 
-#define BLESSING_NO 0
-#define BLESSING_YES 1
+#define HANDSHAKE_FAIL 0
+#define HANDSHAKE_OK 1
+#define HANDSHAKE_DENIED 2
+
+typedef struct _HEADERINFO {
+	int protocol_id;
+	unsigned long output_filesize;
+	char *output_filename;
+	unsigned char sha1[SHA_DIGEST_LENGTH];
+} HEADERINFO;
 
 #define IS_PRINTABLE_CHAR(c) ((unsigned char)(c) >= 0x20 && (unsigned char)(c) <= 0x7E)
 
@@ -28,6 +36,10 @@ const int port = 51337;
 	}\
 	printf("\n");\
 } while(0)
+
+double get_megabytes(unsigned long bytes) {
+	return (bytes)/(1048576.0);
+}
 
 unsigned char *get_sha1(unsigned char* buffer, unsigned long bufsize) {
 	unsigned char *outbuf = malloc(SHA_DIGEST_LENGTH);
@@ -55,7 +67,7 @@ int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
 			return -1;
 		}
 	}
-	fprintf(stderr, "sha1 sums match! =)\n\n");
+	fprintf(stderr, "sha1 sums match! =)\n");
 	fprintf(stderr, "expected \t");
 	print_sha1(sha1_a);
 	fprintf(stderr, ",\ngot \t\t");
