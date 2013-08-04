@@ -24,6 +24,8 @@ int port = DEFAULT_PORT;
 #define SHA1_NOT_INCLUDED 0
 #define SHA1_INCLUDED 1
 
+#define UNBUFFERED_PRINTF(fmt, ...) do { fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
+
 typedef struct _HEADERINFO {
 	int protocol_id;
 	unsigned long filesize;
@@ -39,13 +41,13 @@ void print_ip_addresses() {
 
 	getifaddrs(&addrs);
 
-	fprintf(stderr, "IP addresses for local interfaces via getifaddrs (local loopback lo excluded):\n\n");
+	printf("IP addresses for local interfaces via getifaddrs (local loopback lo excluded):\n\n");
 	char ip_buf[INET_ADDRSTRLEN];	
 	for (addrs_iter = addrs; addrs_iter != NULL; addrs_iter = addrs_iter->ifa_next) {
 		if (addrs_iter->ifa_addr->sa_family == AF_INET) {	// the other option would be AF_INET6, but never mind 
 			if (strcmp(addrs_iter->ifa_name, "lo") == 0) { continue; } // we don't really care about local loopback here
 			inet_ntop(AF_INET, &((struct sockaddr_in *)addrs_iter->ifa_addr)->sin_addr, ip_buf, INET_ADDRSTRLEN);
-			fprintf(stderr, "interface %s ip: %s\n", addrs_iter->ifa_name, ip_buf);
+			printf("interface %s ip: %s\n", addrs_iter->ifa_name, ip_buf);
 		} 
 	}
 	if (addrs != NULL) { 
@@ -92,7 +94,7 @@ void print_sha1(const unsigned char *sha1) {
 		offset += 2;
 	}
 	tmpbuf[offset+1] = '\0';
-	fprintf(stderr, "%s", tmpbuf);
+	printf("%s", tmpbuf);
 }
 
 int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
@@ -103,12 +105,12 @@ int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
 			return -1;
 		}
 	}
-	fprintf(stderr, "sha1 sums match! =)\n");
-	fprintf(stderr, "expected \t");
+	printf("sha1 sums match! =)\n");
+	printf("expected \t");
 	print_sha1(sha1_a);
-	fprintf(stderr, ",\ngot \t\t");
+	printf(",\ngot \t\t");
 	print_sha1(sha1_b);
-	fprintf(stderr, ".\n\n");
+	printf(".\n\n");
 	return 1;
 }
 

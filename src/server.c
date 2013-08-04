@@ -19,6 +19,9 @@ static int local_sockfd = -1;
 static int allow_checksum_skip_flag = 0;
 static int always_accept_flag = 0;
 
+static int running = 0;
+
+static pthread_t progress_thread;
 static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
 	int id;
 	memcpy(&id, buf, sizeof(id));
@@ -96,7 +99,7 @@ typedef struct _progress_struct {
 static void print_progress(long cur_bytes, long total_bytes, const struct timeval *beg) {
 	
 	static const char* esc_composite_clear_line_reset_left = "\r\033[0K";	// ANSI X3.64 magic
-	fprintf(stderr, "%s", esc_composite_clear_line_reset_left);
+	UNBUFFERED_PRINTF("%s", esc_composite_clear_line_reset_left);
 
 	float progress = 100*(float)(cur_bytes)/(float)(total_bytes);
 
@@ -106,7 +109,8 @@ static void print_progress(long cur_bytes, long total_bytes, const struct timeva
 	static const float MB_us_coeff = 1000000.0/1048576.0;
 
 	float rate = MB_us_coeff*((float)cur_bytes)/get_us(beg);	
-	fprintf(stderr, "%lu/%lu bytes received (%.2f %%, %.2f MB/s)", cur_bytes, total_bytes, progress, rate);
+	printf("%lu/%lu bytes received (%.2f %%, %.2f MB/s)", cur_bytes, total_bytes, progress, rate);
+	fflush(stdout);
 
 }
 
@@ -135,10 +139,9 @@ static long recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_
 	p.cur_bytes = &total_bytes_processed;
 	p.total_bytes = file_size;
 	p.beg = &tv_beg;
-	pthread_t t1;
-	pthread_create(&t1, NULL, progress_callback, (void*)&p);
+	pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 
-	while (total_bytes_processed < file_size) {
+	while (total_bytes_processed < file_size || running != 1) {
 		static const int max_chunksize = 16384;
 		static const int spl_flag = SPLICE_F_MORE | SPLICE_F_MOVE;
 
@@ -174,7 +177,8 @@ static long recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_
 		fprintf(stderr, "warning: total_bytes_processed != file_size!\n");
 	}
 
-	pthread_join(t1, NULL);
+	pthread_join(progress_thread, NULL);
+
 	print_progress(total_bytes_processed, file_size, &tv_beg);
 
 	double seconds = get_us(&tv_beg)/1000000.0;
@@ -194,7 +198,7 @@ static void make_lowercase(char *arr, int length) {
 }
 
 static int ask_user_consent() {
-	fprintf(stderr, "Is this ok? [y/N] ");
+	UNBUFFERED_PRINTF("Is this ok? [y/N] ");
 	char buffer[128];
 	buffer[127] = '\0';
 	int index;
@@ -218,26 +222,27 @@ get_answer:
 		return 0;
 	}
 	else { 
-		fprintf(stderr, "Unknown answer \"%s\". [y/N]?", buffer);
+		UNBUFFERED_PRINTF("Unknown answer \"%s\". [y/N]?", buffer);
 		goto get_answer; // ;)
 	} 
 
 }
 
 static void cleanup() {
+	running = 0;
 	close(local_sockfd);
 }
 
 void signal_handler(int sig) {
 	if (sig == SIGINT) {
-		fprintf(stderr, "Received SIGINT. Aborting.\n");
+		fprintf(stderr, "\nReceived SIGINT. Aborting.\n");
 		cleanup();
 		exit(1);
 	}
 }
 
 void usage() {
-	fprintf(stderr, "send_file_server usage:  send_file_server [[ OPTIONS ]]\nOptions:\n -c\t\tallow program to skip checksum verification\n -p PORTNUM\tspecify port (default 51337)\n -h\t\tdisplay this help and exit.\n");
+	fprintf(stderr, "send_file_server usage:  send_file_server [[ OPTIONS ]]\nOptions:\n -a\t\talways accept transfers\n -c\t\tallow program to skip checksum verification\n -p PORTNUM\tspecify port (default 51337)\n -h\t\tdisplay this help and exit.\n");
 }
 
 int main(int argc, char* argv[]) {
@@ -246,12 +251,12 @@ int main(int argc, char* argv[]) {
 	while ((c = getopt(argc, argv, "ahcp:")) != -1) {
 		switch(c) {
 			case 'a':
-				fprintf(stderr, "-a provided -> always accepting file transfers without asking for consent.\n");
+				printf("-a provided -> always accepting file transfers without asking for consent.\n");
 				always_accept_flag = 1;
 				break;
 	
 			case 'c':
-				fprintf(stderr, "-c provided -> allowing program to skip checksum verification.\n");
+				printf("-c provided -> allowing program to skip checksum verification.\n");
 				allow_checksum_skip_flag = 1;
 				break;
 			case 'h':
@@ -387,6 +392,7 @@ int main(int argc, char* argv[]) {
 		consolidate(remote_sockfd, HANDSHAKE_OK);
 
 		long ret;
+		running = 1;
 		if ((ret = recv_file(remote_sockfd, pipefd, outfile_fd, h.filesize)) < h.filesize) {
 			if (ret < 0) {
 				fprintf(stderr, "recv_file failure.\n");
