@@ -154,7 +154,7 @@ static int send_file(char* filename) {
 
 	pthread_join(progress_thread, NULL);
 	print_progress(total_bytes_sent, filesize, &tv_beg);
-	printf("\n transfer successful! XD\n");
+	printf("\nFile transfer successful.\n");
 
 	return 0;
 
@@ -162,7 +162,7 @@ static int send_file(char* filename) {
 }
 
 void usage() {
-	printf("send_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>.\n Options:\n -c:\t\tskip checksum (sha1) verification (requires server-side support)\n -p PORT\tspecify remote port\n -h\t\tdisplay this help and exit.\n\n");
+	printf("\nsend_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>.\n Options:\n -c:\t\tskip checksum (sha1) verification (requires server-side support)\n -p PORT\tspecify remote port\n -h\t\tdisplay this help and exit.\n\n");
 }
 
 void cleanup() {
@@ -227,8 +227,14 @@ int main(int argc, char* argv[]) {
 
 	int rval = 1;
 
-	if (argc - optind > 2) {
-		fprintf(stderr, "send_file client: multiple filenames specified as argument. Sending only one file is supported, so just \033[1mtar\033[m them up kk? ;)\n");
+	int num_nonoption_args = argc - optind;
+
+	if (num_nonoption_args > 2) {
+		fprintf(stderr, "send_file client: multiple filenames specified as argument. Sending only one file is supported.\n");
+		usage();
+		return 1;
+	} else if (num_nonoption_args < 2) {
+		fprintf(stderr, "send_file_client: error: missing either recipient ip or input file.\n");
 		usage();
 		return 1;
 	}
