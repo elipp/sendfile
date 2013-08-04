@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <sys/mman.h>
 #include <libgen.h>
+#include <sys/param.h>
+#include <pthread.h>
 
 #define __USE_GNU
 #include <fcntl.h>
@@ -16,7 +18,11 @@
 #include "send_file.h"
 
 static int local_sockfd;
+static int running = 0;
 static int checksum_flag = 1;
+
+pthread_t progress_thread;
+static progress_struct p;
 
 #define ACCUM_WRITE(var, buffer) do {\
 	memcpy((buffer)+accum, &(var), sizeof(var));\
@@ -47,24 +53,24 @@ static int send_file(char* filename) {
 
 	
 	if (!checksum_flag) {
-		fprintf(stderr, "(skipping checksum calculation)\n");
+		printf("(skipping checksum calculation)\n");
 	}
 	else {
 		unsigned char* block = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
 		if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed.\n"); return -1; }
-		fprintf(stderr, "Calculating sha1 sum of input file...\n");
+		printf("Calculating sha1 sum of input file...\n");
 		sha1 = get_sha1(block, filesize);
 		munmap(block, filesize);
 
-		fprintf(stderr, "Done! (got ");
+		printf("Done! (got ");
 		print_sha1(sha1);
-		fprintf(stderr, ").\n");
+		printf(").\n");
 	}
 
 	char *filename_base = basename(filename);
 	int filename_base_len = strlen(filename_base);
 
-	printf("input file %s (basename %s). filesize: %lu\n", filename, filename_base, filesize);
+	printf("Input file %s (basename %s). filesize: %lu\n", filename, filename_base, filesize);
 
 	char handshake_buffer[128];
 	
@@ -77,11 +83,8 @@ static int send_file(char* filename) {
 		ACCUM_WRITE_ARRAY(sha1, handshake_buffer, SHA_DIGEST_LENGTH);
 	}
 
-//	DUMP_BUFFER(handshake_buffer, accum);
-
-	int sent_bytes;	
+	ssize_t sent_bytes;	
 	sent_bytes = send(local_sockfd, handshake_buffer, accum, 0);
-
 
 	if (sent_bytes < 0) {
 		fprintf(stderr, "sending handshake failed\n");
@@ -89,20 +92,23 @@ static int send_file(char* filename) {
 
 	int received_bytes;
 
-	fprintf(stderr, "Waiting for remote consent...");
+	UNBUFFERED_PRINTF("\nWaiting for remote consent...");
 	received_bytes = recv(local_sockfd, handshake_buffer, 8, 0); 
 	if (received_bytes <= 0) { fprintf(stderr, "recv: blessing length <= 0\n"); return -1; }
+
 	int prid;
-	int handshake_status;
 	memcpy(&prid, handshake_buffer, sizeof(protocol_id));
+
+	int handshake_status;
 	memcpy(&handshake_status, handshake_buffer + sizeof(protocol_id), sizeof(handshake_status));
+
 	if (prid != protocol_id) { 
 		fprintf(stderr, "protocol id mismatch!\n"); 
 		return -1; 
 	}
 	switch (handshake_status) {
 		case HANDSHAKE_OK:
-			fprintf(stderr, "ok.\n");
+			printf("handshake ok.\n");
 			break;
 		case HANDSHAKE_FAIL:
 			fprintf(stderr, "received HANDSHAKE_FAIL (%x) from remote. exiting.\n", handshake_status); 
@@ -113,36 +119,79 @@ static int send_file(char* filename) {
 			return -1;
 			break;
 		case HANDSHAKE_CHECKSUM_REQUIRED:
-			fprintf(stderr, "received HANDSHAKE_CHECKSUM_REQUIRED (%x) from remote (the -c option can't be used).\n", handshake_status);
+			fprintf(stderr, "received HANDSHAKE_CHECKSUM_REQUIRED (%x) from remote (the -c option can't be used). Aborting.\n", handshake_status);
 			return -1;
 		default:
 			break;
 	}
 	
 	// else we're free to start blasting ze file data
-	fprintf(stderr, "Handshake ok. Starting sendfile().\nProgress data unavailable - use an external program, such as NetHogs.\n");
-	if ((sent_bytes = sendfile(local_sockfd, fd, 0, filesize)) < filesize) {
-		if (sent_bytes < 0) {
-			fprintf(stderr, "sendfile() failed: %s\n", strerror(errno)); 
+	printf("Starting sendfile().\n");
+	off_t total_bytes_sent = 0;
+
+	struct timeval tv_beg;
+	memset(&tv_beg, 0, sizeof(tv_beg));
+
+	gettimeofday(&tv_beg, NULL);
+
+	p.cur_bytes = &total_bytes_sent;
+	p.total_bytes = filesize;
+	p.beg = &tv_beg;
+	p.running_flag = &running;
+
+	pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
+	static const long chunk_size = 16384;
+
+	while (total_bytes_sent < filesize && running == 1) {
+		long would_send = filesize-total_bytes_sent;
+		long gonna_send = MIN(would_send, chunk_size);
+		if ((sent_bytes = sendfile(local_sockfd, fd, &total_bytes_sent, gonna_send)) < gonna_send) {
+			if (sent_bytes < 0) {
+				fprintf(stderr, "sendfile() failed: %s\n", strerror(errno)); 
+			}
+			else {
+				fprintf(stderr, "sent_bytes < filesize (!), transfer cancelled by remote.\n");
+			}
+			return -1;
 		}
-		else {
-			fprintf(stderr, "sent_bytes < filesize (!), transfer cancelled by remote.\n");
-		}
-		return -1;
 	}
-	fprintf(stderr, "sendfile() successful.\n");
+
+	pthread_join(progress_thread, NULL);
+	print_progress(total_bytes_sent, filesize, &tv_beg);
 
 	return 0;
-
 
 	free(sha1);
 }
 
 void usage() {
-	fprintf(stderr, "send_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>.\n Options:\n -c:\tskip checksum (sha1) verification (requires server-side support)\n -h\tdisplay this help and exit.\n\n");
+	printf("send_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>.\n Options:\n -c:\tskip checksum (sha1) verification (requires server-side support)\n -h\tdisplay this help and exit.\n\n");
 }
 
+void cleanup() {
+	running = 0;
+	close(local_sockfd);	
+}
+
+void signal_handler(int sig) {
+	if (sig == SIGINT) {
+		fprintf(stderr, "\nReceived SIGINT. Aborting.\n");
+		cleanup();
+		exit(1);
+	}
+}
+
+
 int main(int argc, char* argv[]) {
+
+	struct sigaction new_action, old_action;
+	new_action.sa_handler = signal_handler;
+	sigemptyset(&new_action.sa_mask);
+	new_action.sa_flags = 0;
+	sigaction(SIGINT, NULL, &old_action);
+	if (old_action.sa_handler != SIG_IGN) {
+		sigaction(SIGINT, &new_action, NULL);
+	}
 
 	if (argc < 3) {
 		usage();
@@ -153,7 +202,7 @@ int main(int argc, char* argv[]) {
 	while ((c = getopt(argc, argv, "ch")) != -1) {
 		switch(c) {
 			case 'c':
-				fprintf(stderr, "-c provided -> Skipping checksum computation.\n");
+				printf("-c provided -> Skipping checksum computation.\n");
 				checksum_flag = 0;
 				break;
 			case 'h':
@@ -169,6 +218,8 @@ int main(int argc, char* argv[]) {
 	
 	// send_file RECIPIENT_IP FILENAME
 
+	int rval = 1;
+
 	char* remote_ipstr = strdup(argv[optind]);
 	char* filename = strdup(argv[optind+1]);
 
@@ -181,12 +232,17 @@ int main(int argc, char* argv[]) {
 	local_saddr.sin_port = htons(port);
 
 	local_sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (local_sockfd < 0) { fprintf(stderr, "socket() failed\n"); return 1; }
+	if (local_sockfd < 0) { 
+		fprintf(stderr, "socket() failed\n"); 
+		rval = 1; 
+		goto cleanup_and_exit;
+	}
 
 	remote_saddr.sin_family = AF_INET;
 	if (inet_pton(AF_INET, remote_ipstr, &remote_saddr.sin_addr) <= 0) { 
 		fprintf(stderr, "inet_pton failed. invalid ip_string? (\"%s\")\n", remote_ipstr);
-		return 1;
+		rval = 1;
+		goto cleanup_and_exit;
 	}
 	remote_saddr.sin_port = htons(port);
 
@@ -194,19 +250,25 @@ int main(int argc, char* argv[]) {
 
 	if (connect(local_sockfd, (struct sockaddr*) &remote_saddr, remote_saddr_len) < 0) {
 		fprintf(stderr, "connect failed: %s\n", strerror(errno));
-		return 1;
+		rval = 1;
+		goto cleanup_and_exit;
 	}
 
+	running = 1;
 	if (send_file(filename) < 0) {
 		fprintf(stderr, "send_file failure.\n");
-		return 1;
+		rval = 1;
+		goto cleanup_and_exit;
 	}
+	rval = 0;
 
+cleanup_and_exit:
 	free(remote_ipstr);
 	free(filename);
-	
-	close(local_sockfd);
 
-	return 0;
+	cleanup();
+
+
+	return rval;
 
 }

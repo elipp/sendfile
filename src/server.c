@@ -21,6 +21,13 @@ static int always_accept_flag = 0;
 
 static int running = 0;
 
+static progress_struct p;
+
+static void cleanup() {
+	running = 0;
+	close(local_sockfd);
+}
+
 static pthread_t progress_thread;
 static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
 	int id;
@@ -82,80 +89,37 @@ static int consolidate(int out_sockfd, int flag) {
 	return 0;
 }
 
-static double get_us(const struct timeval *beg) {
-	struct timeval end;
-	memset(&end, 0, sizeof(end));
-	gettimeofday(&end, NULL);
-	double microseconds = (end.tv_sec*1000000 + end.tv_usec) - (beg->tv_sec*1000000 + beg->tv_usec);
-	return microseconds;
-}
 
-typedef struct _progress_struct {
-	const long *cur_bytes;
-	long total_bytes;
-	const struct timeval *beg;
-} progress_struct;
 
-static void print_progress(long cur_bytes, long total_bytes, const struct timeval *beg) {
-	
-	static const char* esc_composite_clear_line_reset_left = "\r\033[0K";	// ANSI X3.64 magic
-	UNBUFFERED_PRINTF("%s", esc_composite_clear_line_reset_left);
-
-	float progress = 100*(float)(cur_bytes)/(float)(total_bytes);
-
-	// MB/s = (bytes/2^20) : (microseconds/1000000)
-	// == (bytes/1048576) * (1000000/microseconds)
-	// == (1000000/1048576) * (bytes/microseconds)
-	static const float MB_us_coeff = 1000000.0/1048576.0;
-
-	float rate = MB_us_coeff*((float)cur_bytes)/get_us(beg);	
-	printf("%lu/%lu bytes received (%.2f %%, %.2f MB/s)", cur_bytes, total_bytes, progress, rate);
-	fflush(stdout);
-
-}
-
-void *progress_callback(void *progress) {
-
-	progress_struct *p = (progress_struct*)progress;
-
-	while (*p->cur_bytes < p->total_bytes) {
-		long cur_bytes = *p->cur_bytes;
-		long total_bytes = p->total_bytes;
-		print_progress(cur_bytes, total_bytes, p->beg);
-		sleep(1);
-	}
-	
-	return NULL;
-}
-
-static long recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_size) {
-	long total_bytes_processed = 0;	
+static long recv_file(int remote_sockfd, int *pipefd, int outfile_fd, ssize_t filesize) {
 	struct timeval tv_beg;
 	memset(&tv_beg, 0, sizeof(tv_beg));
 	gettimeofday(&tv_beg, NULL);
 
-	progress_struct p;
+	
+	off_t total_bytes_processed = 0;	
 
 	p.cur_bytes = &total_bytes_processed;
-	p.total_bytes = file_size;
+	p.total_bytes = filesize;
 	p.beg = &tv_beg;
+	p.running_flag = &running;
 	pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 
-	while (total_bytes_processed < file_size || running != 1) {
+	while (total_bytes_processed < filesize && running == 1) {
 		static const int max_chunksize = 16384;
 		static const int spl_flag = SPLICE_F_MORE | SPLICE_F_MOVE;
 
 		long bytes_recv = 0;
 		long bytes = 0;
 
-		long would_process = file_size - total_bytes_processed;
+		long would_process = filesize - total_bytes_processed;
 	       	long gonna_process = MIN(would_process, max_chunksize);
 
 		// splice to pipe write head
 		if ((bytes = 
 		splice(remote_sockfd, NULL, pipefd[1], NULL, gonna_process, spl_flag)) <= 0) {
-			fprintf(stderr, "socket->pipe_write splice returned %ld: %s\n", bytes_recv, strerror(errno));
-			return -1;
+			fprintf(stderr, "\nsocket->pipe_write splice returned %ld: %s\n", bytes_recv, strerror(errno));
+			cleanup();
 		}
 		// splice from pipe read head to file fd
 		bytes_recv += bytes;
@@ -165,21 +129,21 @@ static long recv_file(int remote_sockfd, int *pipefd, int outfile_fd, long file_
 		while (bytes_in_pipe > 0) {
 			if ((bytes_written = 
 			splice(pipefd[0], NULL, outfile_fd, &total_bytes_processed, bytes_in_pipe, spl_flag)) <= 0) {
-				fprintf(stderr, "pipe_read->file_fd splice returned %d: %sn", bytes_written, strerror(errno));
-				return -1;
+				fprintf(stderr, "\npipe_read->file_fd splice returned %d: %s\n", bytes_written, strerror(errno));
+				cleanup();
 			}
 
 			bytes_in_pipe -= bytes_written;
 
 		}
 	}
-	if (total_bytes_processed != file_size) {
-		fprintf(stderr, "warning: total_bytes_processed != file_size!\n");
+	if (total_bytes_processed != filesize) {
+		fprintf(stderr, "warning: total_bytes_processed != filesize!\n");
 	}
 
 	pthread_join(progress_thread, NULL);
 
-	print_progress(total_bytes_processed, file_size, &tv_beg);
+	print_progress(total_bytes_processed, filesize, &tv_beg);
 
 	double seconds = get_us(&tv_beg)/1000000.0;
 	double MBs = get_megabytes(total_bytes_processed)/seconds;
@@ -228,16 +192,12 @@ get_answer:
 
 }
 
-static void cleanup() {
-	running = 0;
-	close(local_sockfd);
-}
+
 
 void signal_handler(int sig) {
 	if (sig == SIGINT) {
 		fprintf(stderr, "\nReceived SIGINT. Aborting.\n");
 		cleanup();
-		exit(1);
 	}
 }
 
@@ -307,14 +267,16 @@ int main(int argc, char* argv[]) {
 		return 1;
 	}
 
-	fprintf(stderr, "send_file_server (recipient)\n\n");
+	printf("send_file_server (recipient)\n\n");
 	print_ip_addresses();
-	fprintf(stdout, "bind() on port %d.\n", port);
+	printf("bind() on port \033[1m%d\033[m.\n", port);
 	listen(local_sockfd, 5);
 
 	char handshake_buffer[128];
 
-	while (1) {
+	running = 1;
+
+	while (running == 1) {
 		fprintf(stderr, "\nListening for incoming connections.\n");
 
 		int remote_sockfd = -1;
@@ -392,7 +354,6 @@ int main(int argc, char* argv[]) {
 		consolidate(remote_sockfd, HANDSHAKE_OK);
 
 		long ret;
-		running = 1;
 		if ((ret = recv_file(remote_sockfd, pipefd, outfile_fd, h.filesize)) < h.filesize) {
 			if (ret < 0) {
 				fprintf(stderr, "recv_file failure.\n");
