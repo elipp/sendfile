@@ -16,6 +16,8 @@
 #include "send_file.h"
 
 static int local_sockfd = -1;
+static int remote_sockfd = -1;
+
 static int allow_checksum_skip_flag = 0;
 static int always_accept_flag = 0;
 
@@ -26,6 +28,10 @@ static progress_struct p;
 static void cleanup() {
 	running = 0;
 	close(local_sockfd);
+	if (remote_sockfd != -1) {
+		close(remote_sockfd);
+	}
+	exit(1);
 }
 
 static pthread_t progress_thread;
@@ -91,18 +97,14 @@ static int consolidate(int out_sockfd, int flag) {
 
 
 
-static long recv_file(int remote_sockfd, int *pipefd, int outfile_fd, ssize_t filesize) {
+static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize) {
 	struct timeval tv_beg;
 	memset(&tv_beg, 0, sizeof(tv_beg));
 	gettimeofday(&tv_beg, NULL);
 
-	
 	off_t total_bytes_processed = 0;	
 
-	p.cur_bytes = &total_bytes_processed;
-	p.total_bytes = filesize;
-	p.beg = &tv_beg;
-	p.running_flag = &running;
+	p = construct_pstruct(&total_bytes_processed, filesize, &tv_beg, &running);
 	pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 
 	while (total_bytes_processed < filesize && running == 1) {
@@ -117,8 +119,8 @@ static long recv_file(int remote_sockfd, int *pipefd, int outfile_fd, ssize_t fi
 
 		// splice to pipe write head
 		if ((bytes = 
-		splice(remote_sockfd, NULL, pipefd[1], NULL, gonna_process, spl_flag)) <= 0) {
-			fprintf(stderr, "\nsocket->pipe_write splice returned %ld: %s\n", bytes_recv, strerror(errno));
+		splice(sockfd, NULL, pipefd[1], NULL, gonna_process, spl_flag)) <= 0) {
+			fprintf(stderr, "\nsocket->pipe_write splice returned %ld: %s. (connection aborted by client?)\n", bytes_recv, strerror(errno));
 			cleanup();
 		}
 		// splice from pipe read head to file fd
@@ -198,6 +200,7 @@ void signal_handler(int sig) {
 	if (sig == SIGINT) {
 		fprintf(stderr, "\nReceived SIGINT. Aborting.\n");
 		cleanup();
+
 	}
 }
 
@@ -279,7 +282,7 @@ int main(int argc, char* argv[]) {
 	while (running == 1) {
 		fprintf(stderr, "\nListening for incoming connections.\n");
 
-		int remote_sockfd = -1;
+		remote_sockfd = -1;
 		int outfile_fd = -1;
 
 		socklen_t remote_saddr_size = sizeof(remote_saddr);
@@ -384,7 +387,7 @@ int main(int argc, char* argv[]) {
 		else {
 			fprintf(stderr, "(skipping checksum verification)\n\n");
 		}
-		fprintf(stderr, "Success. ");
+		printf("Success.\n");
 
 		free(h.filename);
 

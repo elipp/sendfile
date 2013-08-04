@@ -131,6 +131,17 @@ typedef struct _progress_struct {
 	const int *running_flag;
 } progress_struct;
 
+progress_struct construct_pstruct(const off_t *cur_bytes_addr, ssize_t total_bytes, const struct timeval *beg_addr, const int *running_flag_addr) {
+	progress_struct p;
+
+	p.cur_bytes = cur_bytes_addr;
+	p.total_bytes = total_bytes;
+	p.beg = beg_addr;
+	p.running_flag = running_flag_addr;
+
+	return p;
+}
+
 void print_progress(long cur_bytes, long total_bytes, const struct timeval *beg) {
 	
 	static const char* esc_composite_clear_line_reset_left = "\r\033[0K";	// ANSI X3.64 magic

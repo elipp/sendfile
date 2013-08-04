@@ -64,13 +64,13 @@ static int send_file(char* filename) {
 
 		printf("Done! (got ");
 		print_sha1(sha1);
-		printf(").\n");
+		printf(").\n\n");
 	}
 
 	char *filename_base = basename(filename);
 	int filename_base_len = strlen(filename_base);
 
-	printf("Input file %s (basename %s). filesize: %lu\n", filename, filename_base, filesize);
+	printf("Input file \"%s\":\n basename: %s,\n filesize: %lu\n", filename, filename_base, filesize);
 
 	char handshake_buffer[128];
 	
@@ -134,11 +134,7 @@ static int send_file(char* filename) {
 
 	gettimeofday(&tv_beg, NULL);
 
-	p.cur_bytes = &total_bytes_sent;
-	p.total_bytes = filesize;
-	p.beg = &tv_beg;
-	p.running_flag = &running;
-
+	p = construct_pstruct(&total_bytes_sent, filesize, &tv_beg, &running);
 	pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	static const long chunk_size = 16384;
 
@@ -158,6 +154,7 @@ static int send_file(char* filename) {
 
 	pthread_join(progress_thread, NULL);
 	print_progress(total_bytes_sent, filesize, &tv_beg);
+	printf("\n transfer successful! XD\n");
 
 	return 0;
 
@@ -219,6 +216,12 @@ int main(int argc, char* argv[]) {
 	// send_file RECIPIENT_IP FILENAME
 
 	int rval = 1;
+
+	if (argc - optind > 2) {
+		fprintf(stderr, "send_file client: multiple filenames specified as argument. Sending only one file is supported, so just \033[1mtar\033[m them up kk? ;)\n");
+		usage();
+		return 1;
+	}
 
 	char* remote_ipstr = strdup(argv[optind]);
 	char* filename = strdup(argv[optind+1]);
