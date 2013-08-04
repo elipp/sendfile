@@ -162,7 +162,7 @@ static int send_file(char* filename) {
 }
 
 void usage() {
-	printf("send_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>.\n Options:\n -c:\tskip checksum (sha1) verification (requires server-side support)\n -h\tdisplay this help and exit.\n\n");
+	printf("send_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>.\n Options:\n -c:\t\tskip checksum (sha1) verification (requires server-side support)\n -p PORT\tspecify remote port\n -h\t\tdisplay this help and exit.\n\n");
 }
 
 void cleanup() {
@@ -196,7 +196,8 @@ int main(int argc, char* argv[]) {
 	}
 
 	int c;
-	while ((c = getopt(argc, argv, "ch")) != -1) {
+	char *strtol_endptr;
+	while ((c = getopt(argc, argv, "chp:")) != -1) {
 		switch(c) {
 			case 'c':
 				printf("-c provided -> Skipping checksum computation.\n");
@@ -205,6 +206,15 @@ int main(int argc, char* argv[]) {
 			case 'h':
 				usage();
 				return 0;
+			case 'p': 
+				port = strtol(optarg, &strtol_endptr, 0);	// base-10 
+				if (strtol_endptr == optarg || *strtol_endptr != '\0') {
+					// endptr != '\0' indicates only a part of the string was used in the conversion
+					fprintf(stderr, "Invalid port specification \"%s\", attempting to use default port %d instead.\n", optarg, DEFAULT_PORT);
+					port = DEFAULT_PORT;
+				}
+				break;
+
 			case '?':
 				fprintf(stderr, "warning: unknown option \'-%c\n\'", optopt);
 				break;
@@ -244,6 +254,7 @@ int main(int argc, char* argv[]) {
 	remote_saddr.sin_family = AF_INET;
 	if (inet_pton(AF_INET, remote_ipstr, &remote_saddr.sin_addr) <= 0) { 
 		fprintf(stderr, "inet_pton failed. invalid ip_string? (\"%s\")\n", remote_ipstr);
+		usage();
 		rval = 1;
 		goto cleanup_and_exit;
 	}

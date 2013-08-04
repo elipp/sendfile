@@ -211,6 +211,7 @@ void usage() {
 int main(int argc, char* argv[]) {
 
 	int c;
+	char *strtol_endptr;
 	while ((c = getopt(argc, argv, "ahcp:")) != -1) {
 		switch(c) {
 			case 'a':
@@ -227,9 +228,10 @@ int main(int argc, char* argv[]) {
 				return 0;
 				break;
 			case 'p':
-				port = atoi(optarg);
-				if (port == 0) {
-					fprintf(stderr, "Invalid port %s, attempting to use default port %d instead.\n", optarg, DEFAULT_PORT);
+				port = strtol(optarg, &strtol_endptr, 0);	// base-10 
+				if (strtol_endptr == optarg || *strtol_endptr != '\0') {
+					// endptr != '\0' indicates only a part of the string was used in the conversion
+					fprintf(stderr, "Invalid port specification \"%s\", attempting to use default port %d instead.\n", optarg, DEFAULT_PORT);
 					port = DEFAULT_PORT;
 				}
 				break;
