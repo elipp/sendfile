@@ -23,7 +23,9 @@ static int always_accept_flag = 0;
 
 static int running = 0;
 
+static int progress_bar_flag = 1;
 static progress_struct p;
+static pthread_t progress_thread;
 
 static void cleanup() {
 	running = 0;
@@ -34,7 +36,6 @@ static void cleanup() {
 	exit(1);
 }
 
-static pthread_t progress_thread;
 static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
 	int id;
 	memcpy(&id, buf, sizeof(id));
@@ -104,8 +105,10 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 
 	off_t total_bytes_processed = 0;	
 
-	p = construct_pstruct(&total_bytes_processed, filesize, &tv_beg, &running);
-	pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
+	if (progress_bar_flag == 1) {
+		p = construct_pstruct(&total_bytes_processed, filesize, &tv_beg, &running);
+		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
+	}
 
 	while (total_bytes_processed < filesize && running == 1) {
 		static const int max_chunksize = 16384;
@@ -142,10 +145,11 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 	if (total_bytes_processed != filesize) {
 		fprintf(stderr, "warning: total_bytes_processed != filesize!\n");
 	}
+	
+	if (progress_bar_flag == 1) {
+		pthread_join(progress_thread, NULL);
+	}
 
-	pthread_join(progress_thread, NULL);
-
-	print_progress(total_bytes_processed, filesize, &tv_beg);
 
 	double seconds = get_us(&tv_beg)/1000000.0;
 	double MBs = get_megabytes(total_bytes_processed)/seconds;
@@ -205,20 +209,30 @@ void signal_handler(int sig) {
 }
 
 void usage() {
-	fprintf(stderr, "send_file_server usage:  send_file_server [[ OPTIONS ]]\nOptions:\n -a\t\talways accept transfers\n -c\t\tallow program to skip checksum verification\n -p PORTNUM\tspecify port (default 51337)\n -h\t\tdisplay this help and exit.\n");
+	fprintf(stderr, "send_file_server usage:  send_file_server [[ OPTIONS ]]\n"\
+			"Options:\n"\
+		        " -a\t\talways accept transfers\n"\
+			" -b\t\tdisable progress monitoring (default: enabled)\n"\
+		        " -c\t\tallow program to skip checksum verification\n"\
+		        " -p PORTNUM\tspecify port (default 51337)\n"\
+		        " -h\t\tdisplay this help and exit.\n");
 }
 
 int main(int argc, char* argv[]) {
 
 	int c;
 	char *strtol_endptr;
-	while ((c = getopt(argc, argv, "ahcp:")) != -1) {
+	while ((c = getopt(argc, argv, "abchp:")) != -1) {
 		switch(c) {
 			case 'a':
 				printf("-a provided -> always accepting file transfers without asking for consent.\n");
 				always_accept_flag = 1;
 				break;
-	
+			case 'b':
+				printf("-b provided -> progress monitoring disabled.\n");	
+				progress_bar_flag = 0;
+				break;
+
 			case 'c':
 				printf("-c provided -> allowing program to skip checksum verification.\n");
 				allow_checksum_skip_flag = 1;

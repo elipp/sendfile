@@ -178,6 +178,8 @@ void *progress_callback(void *progress) {
 		sleep(1);
 	}
 	
+	print_progress(*p->cur_bytes, p->total_bytes, p->beg);
+	
 	return NULL;
 }
 

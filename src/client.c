@@ -21,6 +21,7 @@ static int local_sockfd;
 static int running = 0;
 static int checksum_flag = 1;
 
+static int progress_bar_flag = 1;
 pthread_t progress_thread;
 static progress_struct p;
 
@@ -133,9 +134,12 @@ static int send_file(char* filename) {
 	memset(&tv_beg, 0, sizeof(tv_beg));
 
 	gettimeofday(&tv_beg, NULL);
+	
+	if (progress_bar_flag == 1) {
+		p = construct_pstruct(&total_bytes_sent, filesize, &tv_beg, &running);
+		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
+	}
 
-	p = construct_pstruct(&total_bytes_sent, filesize, &tv_beg, &running);
-	pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	static const long chunk_size = 16384;
 
 	while (total_bytes_sent < filesize && running == 1) {
@@ -152,9 +156,16 @@ static int send_file(char* filename) {
 		}
 	}
 
-	pthread_join(progress_thread, NULL);
-	print_progress(total_bytes_sent, filesize, &tv_beg);
+	if (progress_bar_flag == 1) {
+		pthread_join(progress_thread, NULL);
+	}
+
 	printf("\nFile transfer successful.\n");
+
+	double seconds = get_us(&tv_beg)/1000000.0;
+	double MBs = get_megabytes(total_bytes_sent)/seconds;
+
+	fprintf(stderr, "\nReceived %.2f MB in %.3f seconds (%.2f MB/s).\n\n", get_megabytes(total_bytes_sent), seconds, MBs);
 
 	return 0;
 
@@ -162,7 +173,12 @@ static int send_file(char* filename) {
 }
 
 void usage() {
-	printf("\nsend_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>.\n Options:\n -c:\t\tskip checksum (sha1) verification (requires server-side support)\n -p PORT\tspecify remote port\n -h\t\tdisplay this help and exit.\n\n");
+	printf("\nsend_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>."\
+	       "\n Options:\n"\
+	       " -b:\t\tdisable progress monitoring (default: on)\n"\
+	       " -c:\t\tskip checksum (sha1) verification (requires server-side support)\n"\
+	       " -p PORT\tspecify remote port\n"\
+	       " -h\t\tdisplay this help and exit.\n\n");
 }
 
 void cleanup() {
@@ -186,26 +202,29 @@ int main(int argc, char* argv[]) {
 	sigemptyset(&new_action.sa_mask);
 	new_action.sa_flags = 0;
 	sigaction(SIGINT, NULL, &old_action);
+
 	if (old_action.sa_handler != SIG_IGN) {
 		sigaction(SIGINT, &new_action, NULL);
 	}
 
-	if (argc < 3) {
-		usage();
-		return 1;
-	}
-
 	int c;
 	char *strtol_endptr;
-	while ((c = getopt(argc, argv, "chp:")) != -1) {
+	while ((c = getopt(argc, argv, "bchp:")) != -1) {
 		switch(c) {
+			case 'b':
+				printf("-b provided -> progress monitoring disabled.\n");
+				progress_bar_flag = 0;
+				break;
+
 			case 'c':
 				printf("-c provided -> Skipping checksum computation.\n");
 				checksum_flag = 0;
 				break;
+
 			case 'h':
 				usage();
 				return 0;
+
 			case 'p': 
 				port = strtol(optarg, &strtol_endptr, 0);	// base-10 
 				if (strtol_endptr == optarg || *strtol_endptr != '\0') {
@@ -216,8 +235,11 @@ int main(int argc, char* argv[]) {
 				break;
 
 			case '?':
-				fprintf(stderr, "warning: unknown option \'-%c\n\'", optopt);
+				if (optopt != 'p') {
+					fprintf(stderr, "warning: unknown option \'-%c\'\n", optopt);
+				}
 				break;
+
 			default:
 				abort();
 		}
