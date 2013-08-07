@@ -55,7 +55,7 @@ static int send_file(char* filename) {
 	}
 	else {
 		unsigned char* block = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-		if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed.\n"); return -1; }
+		if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed %s\n", strerror(errno)); return -1; }
 		printf("Calculating sha1 sum of input file...\n");
 		sha1 = get_sha1(block, filesize);
 		munmap(block, filesize);
@@ -85,14 +85,15 @@ static int send_file(char* filename) {
 	sent_bytes = send(local_sockfd, handshake_buffer, accum, 0);
 
 	if (sent_bytes < 0) {
-		fprintf(stderr, "sending handshake failed\n");
+		fprintf(stderr, "sending handshake failed, %s\n", strerror(errno));
+		return -1;
 	}
 
 	int received_bytes;
 
 	UNBUFFERED_PRINTF("\nWaiting for remote consent...");
 	received_bytes = recv(local_sockfd, handshake_buffer, 8, 0); 
-	if (received_bytes <= 0) { fprintf(stderr, "recv: blessing length <= 0\n"); return -1; }
+	if (received_bytes <= 0) { fprintf(stderr, "recv: blessing length <= 0 (%s)\n", strerror(errno)); return -1; }
 
 	int prid;
 	memcpy(&prid, handshake_buffer, sizeof(protocol_id));

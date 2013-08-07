@@ -268,7 +268,7 @@ int main(int argc, char* argv[]) {
 
 	local_sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (local_sockfd < 0) {
-		fprintf(stderr, "socket() failed.\n");
+		fprintf(stderr, "socket() failed: %s\n", strerror(errno));
 		return 1;
 	}
 
@@ -302,7 +302,7 @@ int main(int argc, char* argv[]) {
 		socklen_t remote_saddr_size = sizeof(remote_saddr);
 		remote_sockfd = accept(local_sockfd, (struct sockaddr *) &remote_saddr, &remote_saddr_size);
 		if (remote_sockfd < 0) {
-			fprintf(stderr, "warning: accept() failed.\n");
+			fprintf(stderr, "warning: accept() failed: %s\n", strerror(errno));
 		}
 
 		char ip_buf[32];
@@ -312,7 +312,7 @@ int main(int argc, char* argv[]) {
 		int received_bytes = 0;	
 		int handshake_len = recv(remote_sockfd, handshake_buffer, sizeof(handshake_buffer), 0);
 		if (handshake_len <= 0) {
-			fprintf(stderr, "error: handshake_len <= 0\n");
+			fprintf(stderr, "error: handshake_len <= 0: %s\n", strerror(errno));
 			close(remote_sockfd); 
 			continue;
 		}
@@ -341,7 +341,7 @@ int main(int argc, char* argv[]) {
 		int pipefd[2];
 
 		if (pipe(pipefd) < 0) {
-			fprintf(stderr, "pipe() error.\n");
+			fprintf(stderr, "pipe() error: %s\n", strerror(errno));
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
 			goto cleanup;
 		}
