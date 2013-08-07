@@ -12,9 +12,6 @@
 #include <sys/param.h>
 #include <pthread.h>
 
-#define __USE_GNU
-#include <fcntl.h>
-
 #include "send_file.h"
 
 static int local_sockfd;

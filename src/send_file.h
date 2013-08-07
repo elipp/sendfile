@@ -11,6 +11,10 @@
 #include <arpa/inet.h>
 #include <signal.h>
 
+#define _GNU_SOURCE
+#define __USE_GNU // for splice constants, SPLICE_F_MOVE, SPLICE_F_MORE
+#include <fcntl.h>
+
 const int protocol_id = 0x0d355480;
 
 #define DEFAULT_PORT 51337
@@ -179,6 +183,7 @@ void *progress_callback(void *progress) {
 	}
 	
 	print_progress(*p->cur_bytes, p->total_bytes, p->beg);
+	fprintf(stderr, "\n");
 	
 	return NULL;
 }

@@ -11,8 +11,6 @@
 #include <sys/mman.h>
 #include <pthread.h>
 
-#define __USE_GNU // for splice constants, SPLICE_F_MOVE, SPLICE_F_MORE
-#include <fcntl.h>
 #include "send_file.h"
 
 static int local_sockfd = -1;
