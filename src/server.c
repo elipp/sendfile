@@ -101,7 +101,7 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 	memset(&tv_beg, 0, sizeof(tv_beg));
 	gettimeofday(&tv_beg, NULL);
 
-	off_t total_bytes_processed = 0;	
+	__off64_t total_bytes_processed = 0;	
 
 	if (progress_bar_flag == 1) {
 		p = construct_pstruct(&total_bytes_processed, filesize, &tv_beg, &running);
