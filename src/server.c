@@ -101,7 +101,7 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 	memset(&tv_beg, 0, sizeof(tv_beg));
 	gettimeofday(&tv_beg, NULL);
 
-	__off64_t total_bytes_processed = 0;	
+	off_t total_bytes_processed = 0;	
 
 	if (progress_bar_flag == 1) {
 		p = construct_pstruct(&total_bytes_processed, filesize, &tv_beg, &running);
@@ -115,8 +115,8 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 		long bytes_recv = 0;
 		long bytes = 0;
 
-		long would_process = filesize - total_bytes_processed;
-	       	long gonna_process = MIN(would_process, max_chunksize);
+		off_t would_process = filesize - total_bytes_processed;
+	       	off_t gonna_process = MIN(would_process, max_chunksize);
 
 		// splice to pipe write head
 		if ((bytes = 
@@ -129,9 +129,10 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 
 		int bytes_in_pipe = bytes_recv;
 		int bytes_written = 0;
+
 		while (bytes_in_pipe > 0) {
 			if ((bytes_written = 
-			splice(pipefd[0], NULL, outfile_fd, &total_bytes_processed, bytes_in_pipe, spl_flag)) <= 0) {
+			splice(pipefd[0], NULL, outfile_fd, (__off64_t*)&total_bytes_processed, bytes_in_pipe, spl_flag)) <= 0) {
 				fprintf(stderr, "\npipe_read->file_fd splice returned %d: %s\n", bytes_written, strerror(errno));
 				cleanup();
 			}
