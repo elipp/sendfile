@@ -101,10 +101,12 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 	memset(&tv_beg, 0, sizeof(tv_beg));
 	gettimeofday(&tv_beg, NULL);
 
-	off_t total_bytes_processed = 0;	
+	__off64_t total_bytes_processed = 0;	
+	static off_t bytes_processed_mirror;
+	bytes_processed_mirror = total_bytes_processed;
 
 	if (progress_bar_flag == 1) {
-		p = construct_pstruct(&total_bytes_processed, filesize, &tv_beg, &running);
+		p = construct_pstruct(&bytes_processed_mirror, filesize, &tv_beg, &running);
 		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	}
 
@@ -130,11 +132,9 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 		int bytes_in_pipe = bytes_recv;
 		int bytes_written = 0;
 
-		__off64_t k = total_bytes_processed;
-
 		while (bytes_in_pipe > 0) {
 			if ((bytes_written = 
-			splice(pipefd[0], NULL, outfile_fd, &k, bytes_in_pipe, spl_flag)) <= 0) {
+			splice(pipefd[0], NULL, outfile_fd, &total_bytes_processed, bytes_in_pipe, spl_flag)) <= 0) {
 				fprintf(stderr, "\npipe_read->file_fd splice returned %d: %s\n", bytes_written, strerror(errno));
 				cleanup();
 			}
@@ -142,7 +142,7 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 			bytes_in_pipe -= bytes_written;
 
 		}
-		total_bytes_processed = k;
+		bytes_processed_mirror = total_bytes_processed;
 	}
 	if (total_bytes_processed != filesize) {
 		fprintf(stderr, "warning: total_bytes_processed != filesize!\n");
@@ -380,7 +380,7 @@ int main(int argc, char* argv[]) {
 				fprintf(stderr, "recv_file failure.\n");
 			}
 			else {
-				fprintf(stderr, "recv_file: warning: received data size (%ld) is less than expected (%lu)!\n", ret, h.filesize);
+				fprintf(stderr, "recv_file: warning: received data size (%ld) is less than expected (%zd)!\n", ret, h.filesize);
 			}
 			goto cleanup;
 		}
