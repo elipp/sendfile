@@ -35,10 +35,10 @@ int port = DEFAULT_PORT;
 #define UNBUFFERED_PRINTF(fmt, ...) do { fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
 
 typedef struct _HEADERINFO {
-	int32_t protocol_id;
 	int64_t filesize;
-	char *filename;
+	int32_t protocol_id;
 	int32_t sha1_included;
+	char *filename;
 	unsigned char sha1[SHA_DIGEST_LENGTH];
 } HEADERINFO;
 

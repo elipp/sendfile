@@ -152,7 +152,7 @@ static int send_file(char* filename) {
 				fprintf(stderr, "sendfile() failed: %s\n", strerror(errno)); 
 			}
 			else {
-				fprintf(stderr, "\nsent_bytes < filesize (!), transfer cancelled by remote.\n");
+				fprintf(stderr, "sent_bytes < filesize (!), transfer cancelled by remote.\n");
 			}
 			return -1;
 		}
@@ -174,7 +174,7 @@ static int send_file(char* filename) {
 }
 
 void usage() {
-	printf("send_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>."\
+	printf("\nsend_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>."\
 	       "\n Options:\n"\
 	       " -b:\t\tdisable progress monitoring (default: on)\n"\
 	       " -c:\t\tskip checksum (sha1) verification (requires server-side support)\n"\
