@@ -59,7 +59,7 @@ static char *get_available_filename(const char* orig_filename) {
 
 static int get_headerinfo(const char* buf, size_t buf_size, HEADERINFO *h) {
 	memset(h, 0, sizeof(HEADERINFO));
-	long accum = 0;
+	int64_t accum = 0;
 	memcpy(&h->protocol_id, buf, sizeof(h->protocol_id));
 	accum += sizeof(h->protocol_id);
 
@@ -96,13 +96,13 @@ static int consolidate(int out_sockfd, int flag) {
 
 
 
-static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize) {
+static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesize) {
 	struct timeval tv_beg;
 	memset(&tv_beg, 0, sizeof(tv_beg));
 	gettimeofday(&tv_beg, NULL);
 
 	__off64_t total_bytes_processed = 0;	
-	static off_t bytes_processed_mirror;
+	static off_t bytes_processed_mirror;	// splice on 32-bit linux requires __off64_t* as fourth argument
 	bytes_processed_mirror = total_bytes_processed;
 
 	if (progress_bar_flag == 1) {
@@ -114,8 +114,8 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 		static const int max_chunksize = 16384;
 		static const int spl_flag = SPLICE_F_MORE | SPLICE_F_MOVE;
 
-		long bytes_recv = 0;
-		long bytes = 0;
+		int64_t bytes_recv = 0;
+		int64_t bytes = 0;
 
 		off_t would_process = filesize - total_bytes_processed;
 	       	off_t gonna_process = MIN(would_process, max_chunksize);
@@ -123,7 +123,7 @@ static long recv_file(int sockfd, int *pipefd, int outfile_fd, ssize_t filesize)
 		// splice to pipe write head
 		if ((bytes = 
 		splice(sockfd, NULL, pipefd[1], NULL, gonna_process, spl_flag)) <= 0) {
-			fprintf(stderr, "\nsocket->pipe_write splice returned %ld: %s. (connection aborted by client?)\n", bytes_recv, strerror(errno));
+			fprintf(stderr, "\nsocket->pipe_write splice returned %" PRId64 ": %s. (connection aborted by client?)\n", bytes_recv, strerror(errno));
 			cleanup();
 		}
 		// splice from pipe read head to file fd
@@ -315,7 +315,7 @@ int main(int argc, char* argv[]) {
 
 		int received_bytes = 0;	
 		int handshake_len = recv(remote_sockfd, handshake_buffer, sizeof(handshake_buffer), 0);
-		if (handshake_len <= 0) {
+		if (handshake_len < 0) {
 			fprintf(stderr, "error: handshake_len <= 0: %s\n", strerror(errno));
 			close(remote_sockfd); 
 			continue;
@@ -374,13 +374,13 @@ int main(int argc, char* argv[]) {
 		// inform the client program that they can start blasting dat file data
 		consolidate(remote_sockfd, HANDSHAKE_OK);
 
-		long ret;
+		int64_t ret;
 		if ((ret = recv_file(remote_sockfd, pipefd, outfile_fd, h.filesize)) < h.filesize) {
 			if (ret < 0) {
 				fprintf(stderr, "recv_file failure.\n");
 			}
 			else {
-				fprintf(stderr, "recv_file: warning: received data size (%ld) is less than expected (%zd)!\n", ret, h.filesize);
+				fprintf(stderr, "recv_file: warning: received data size (%" PRId64 ") is less than expected (%" PRId64 ")!\n", ret, h.filesize);
 			}
 			goto cleanup;
 		}

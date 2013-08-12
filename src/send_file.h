@@ -10,6 +10,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <stdint.h>
+#include <inttypes.h>
 
 #define _GNU_SOURCE
 #define __USE_GNU // for splice constants, SPLICE_F_MOVE, SPLICE_F_MORE
@@ -33,10 +35,10 @@ int port = DEFAULT_PORT;
 #define UNBUFFERED_PRINTF(fmt, ...) do { fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
 
 typedef struct _HEADERINFO {
-	int protocol_id;
-	ssize_t filesize;
+	int32_t protocol_id;
+	int64_t filesize;
 	char *filename;
-	int sha1_included;
+	int32_t sha1_included;
 	unsigned char sha1[SHA_DIGEST_LENGTH];
 } HEADERINFO;
 
@@ -130,12 +132,12 @@ int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
 
 typedef struct _progress_struct {
 	const off_t *cur_bytes;
-	ssize_t total_bytes;
+	int64_t total_bytes;
 	const struct timeval *beg;
 	const int *running_flag;
 } progress_struct;
 
-progress_struct construct_pstruct(const off_t *cur_bytes_addr, ssize_t total_bytes, const struct timeval *beg_addr, const int *running_flag_addr) {
+progress_struct construct_pstruct(const off_t *cur_bytes_addr, int64_t total_bytes, const struct timeval *beg_addr, const int *running_flag_addr) {
 	progress_struct p;
 
 	p.cur_bytes = cur_bytes_addr;

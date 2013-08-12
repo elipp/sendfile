@@ -16,7 +16,7 @@
 
 static int local_sockfd;
 static int running = 0;
-static int checksum_flag = 1;
+static int32_t checksum_flag = 1;
 
 static int progress_bar_flag = 1;
 pthread_t progress_thread;
@@ -46,10 +46,11 @@ static int send_file(char* filename) {
 	struct stat st;
 	fstat(fd, &st);
 
-	unsigned long filesize = st.st_size;
-	unsigned char *sha1 = NULL;
+	HEADERINFO h;
+	h.protocol_id = protocol_id;
+	h.filesize = st.st_size;
+	h.sha1_included = checksum_flag;
 
-	
 	if (!checksum_flag) {
 		printf("(skipping checksum calculation)\n");
 	}
@@ -57,31 +58,34 @@ static int send_file(char* filename) {
 		unsigned char* block = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
 		if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed %s\n", strerror(errno)); return -1; }
 		printf("Calculating sha1 sum of input file...\n");
-		sha1 = get_sha1(block, filesize);
-		munmap(block, filesize);
+		unsigned char *sha1 = get_sha1(block, h.filesize);
+		memcpy(h.sha1, sha1, SHA_DIGEST_LENGTH);
+		munmap(block, h.filesize);
 
 		printf("Done! (got ");
 		print_sha1(sha1);
 		printf(").\n\n");
+
+		free(sha1);
 	}
 
-	char *filename_base = basename(filename);
-	int filename_base_len = strlen(filename_base);
+	h.filename = basename(filename);
+	int filename_base_len = strlen(h.filename);
 
-	printf("Input file \"%s\":\n basename: %s,\n filesize: %lu\n", filename, filename_base, filesize);
+	printf("Input file \"%s\":\n basename: %s,\n filesize: %" PRId64"\n", filename, h.filename, h.filesize);
 
 	char handshake_buffer[128];
 	
-	int accum = 0;
-	ACCUM_WRITE(protocol_id, handshake_buffer);
-	ACCUM_WRITE(filesize, handshake_buffer);
-	ACCUM_WRITE(checksum_flag, handshake_buffer);
-	ACCUM_WRITE_ARRAY(filename_base, handshake_buffer, filename_base_len+1); // to include the \0 char
-	if (checksum_flag) {
-		ACCUM_WRITE_ARRAY(sha1, handshake_buffer, SHA_DIGEST_LENGTH);
+	int64_t accum = 0;
+	ACCUM_WRITE(h.protocol_id, handshake_buffer);
+	ACCUM_WRITE(h.filesize, handshake_buffer);
+	ACCUM_WRITE(h.sha1_included, handshake_buffer);
+	ACCUM_WRITE_ARRAY(h.filename, handshake_buffer, filename_base_len+1); // to include the \0 char
+	if (h.sha1_included) {
+		ACCUM_WRITE_ARRAY(h.sha1, handshake_buffer, SHA_DIGEST_LENGTH);
 	}
 
-	ssize_t sent_bytes;	
+	int64_t sent_bytes;	
 	sent_bytes = send(local_sockfd, handshake_buffer, accum, 0);
 
 	if (sent_bytes < 0) {
@@ -134,14 +138,14 @@ static int send_file(char* filename) {
 	gettimeofday(&tv_beg, NULL);
 	
 	if (progress_bar_flag == 1) {
-		p = construct_pstruct(&total_bytes_sent, filesize, &tv_beg, &running);
+		p = construct_pstruct(&total_bytes_sent, h.filesize, &tv_beg, &running);
 		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	}
 
 	static const long chunk_size = 16384;
 
-	while (total_bytes_sent < filesize && running == 1) {
-		long would_send = filesize-total_bytes_sent;
+	while (total_bytes_sent < h.filesize && running == 1) {
+		long would_send = h.filesize-total_bytes_sent;
 		long gonna_send = MIN(would_send, chunk_size);
 		if ((sent_bytes = sendfile(local_sockfd, fd, &total_bytes_sent, gonna_send)) < gonna_send) {
 			if (sent_bytes < 0) {
@@ -167,7 +171,6 @@ static int send_file(char* filename) {
 
 	return 0;
 
-	free(sha1);
 }
 
 void usage() {
