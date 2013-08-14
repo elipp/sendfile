@@ -97,16 +97,15 @@ static int consolidate(int out_sockfd, int flag) {
 
 
 static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesize) {
-	struct timeval tv_beg;
-	memset(&tv_beg, 0, sizeof(tv_beg));
-	gettimeofday(&tv_beg, NULL);
 
 	__off64_t total_bytes_processed = 0;	
 	static off_t bytes_processed_mirror;	// splice on 32-bit linux requires __off64_t* as fourth argument
 	bytes_processed_mirror = total_bytes_processed;
 
+	struct _timer timer = timer_construct();
+
 	if (progress_bar_flag == 1) {
-		p = construct_pstruct(&bytes_processed_mirror, filesize, &tv_beg, &running);
+		p = construct_pstruct(&bytes_processed_mirror, filesize, &timer, &running);
 		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	}
 
@@ -153,7 +152,7 @@ static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesi
 	}
 
 
-	double seconds = get_us(&tv_beg)/1000000.0;
+	double seconds = timer.get_us(&timer)/1000000.0;
 	double MBs = get_megabytes(total_bytes_processed)/seconds;
 
 	fprintf(stderr, "\nReceived %.2f MB in %.3f seconds (%.2f MB/s).\n\n", get_megabytes(total_bytes_processed), seconds, MBs);
@@ -295,8 +294,10 @@ int main(int argc, char* argv[]) {
 
 	char handshake_buffer[128];
 
+
 	running = 1;
 
+	#define DO_CLEANUP do{close(remote_sockfd);close(outfile_fd);}while(0)
 	while (running == 1) {
 		fprintf(stderr, "\nListening for incoming connections.\n");
 
@@ -325,7 +326,7 @@ int main(int argc, char* argv[]) {
 		if (validate_protocol_welcome_header(handshake_buffer, handshake_len) < 0) {
 			fprintf(stderr, "warning: validate_protocol_welcome_header failed!\n");
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			goto cleanup;
+			DO_CLEANUP;
 		}
 
 		HEADERINFO h;
@@ -333,13 +334,13 @@ int main(int argc, char* argv[]) {
 		if (get_headerinfo(handshake_buffer, handshake_len, &h) < 0) {
 			fprintf(stderr, "error: headerinfo error!\n");
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			goto cleanup;
+			DO_CLEANUP;
 		}
 
 		if (h.sha1_included == 0 && allow_checksum_skip_flag == 0) {
 			fprintf(stderr, "error: client didn't provide a sha1 hash for the input file (-c was used; use -c on the server to allow this). Rejecting.\n");
 			consolidate(remote_sockfd, HANDSHAKE_CHECKSUM_REQUIRED);
-			goto cleanup;
+			DO_CLEANUP;
 		}
 
 		int pipefd[2];
@@ -347,7 +348,7 @@ int main(int argc, char* argv[]) {
 		if (pipe(pipefd) < 0) {
 			fprintf(stderr, "pipe() error: %s\n", strerror(errno));
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			goto cleanup;
+			DO_CLEANUP;
 		}
 
 		char *name = get_available_filename(h.filename);
@@ -357,7 +358,7 @@ int main(int argc, char* argv[]) {
 		if (always_accept_flag == 0) {
 			if (!ask_user_consent()) { 
 				consolidate(remote_sockfd, HANDSHAKE_DENIED); 
-				goto cleanup; 
+				DO_CLEANUP;
 			}
 		}
 
@@ -368,7 +369,7 @@ int main(int argc, char* argv[]) {
 		if (outfile_fd < 0) {
 			fprintf(stderr, "open() failed (errno: %s).\n", strerror(errno));
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			goto cleanup;
+			DO_CLEANUP;
 		}
 
 		// inform the client program that they can start blasting dat file data
@@ -382,14 +383,11 @@ int main(int argc, char* argv[]) {
 			else {
 				fprintf(stderr, "recv_file: warning: received data size (%" PRId64 ") is less than expected (%" PRId64 ")!\n", ret, h.filesize);
 			}
-			goto cleanup;
+			DO_CLEANUP;
 		}
 		
-		unsigned char* block = mmap(NULL, h.filesize, PROT_READ, MAP_SHARED, outfile_fd, 0);
-		if (block == MAP_FAILED) {
-			fprintf(stderr, "mmap on outfile_fd failed: %s.\n", strerror(errno));
-			return 1;
-		}
+		unsigned char *block = (unsigned char*)my_mmap_readonly_shared(outfile_fd, h.filesize, NULL);
+		if (!block) { close(outfile_fd); return -1; }
 
 		if (h.sha1_included && allow_checksum_skip_flag == 0) {
 			fprintf(stderr, "Calculating sha1 sum...\n\n");
@@ -408,10 +406,6 @@ int main(int argc, char* argv[]) {
 		printf("Success.\n");
 
 		free(h.filename);
-
-	cleanup:
-		close(remote_sockfd);
-		close(outfile_fd);
 
 	}
 

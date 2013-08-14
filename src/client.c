@@ -132,13 +132,10 @@ static int send_file(char* filename) {
 	printf("Starting sendfile().\n");
 	off_t total_bytes_sent = 0;
 
-	struct timeval tv_beg;
-	memset(&tv_beg, 0, sizeof(tv_beg));
-
-	gettimeofday(&tv_beg, NULL);
+	struct _timer timer = timer_construct();
 	
 	if (progress_bar_flag == 1) {
-		p = construct_pstruct(&total_bytes_sent, h.filesize, &tv_beg, &running);
+		p = construct_pstruct(&total_bytes_sent, h.filesize, &timer, &running);
 		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	}
 
@@ -164,7 +161,7 @@ static int send_file(char* filename) {
 
 	printf("\nFile transfer successful.\n");
 
-	double seconds = get_us(&tv_beg)/1000000.0;
+	double seconds = timer.get_us(&timer)/1000000.0;
 	double MBs = get_megabytes(total_bytes_sent)/seconds;
 
 	fprintf(stderr, "\nReceived %.2f MB in %.3f seconds (%.2f MB/s).\n\n", get_megabytes(total_bytes_sent), seconds, MBs);
