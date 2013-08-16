@@ -41,7 +41,7 @@ static progress_struct p;
 static int send_file(char* filename) {
 
 	int fd = open(filename, O_RDONLY);
-	if (fd < 0) { fprintf(stderr, "send_handshake: opening file failed.\n"); return -1; }
+	if (fd < 0) { fprintf(stderr, "send_handshake: opening file failed: %s\n", strerror(errno)); return -1; }
 
 	struct stat st;
 	fstat(fd, &st);
@@ -130,22 +130,22 @@ static int send_file(char* filename) {
 	
 	// else we're free to start blasting ze file data
 	printf("Starting sendfile().\n");
-	off_t total_bytes_sent = 0;
-	static int64_t total_bytes_sent_mirror = 0;
+	int64_t total_bytes_sent = 0;
 
 	struct _timer timer = timer_construct();
 	
 	if (progress_bar_flag == 1) {
-		p = construct_pstruct(&total_bytes_sent_mirror, h.filesize, &timer, &running);
+		p = construct_pstruct(&total_bytes_sent, h.filesize, &timer, &running);
 		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	}
 
 	static const long chunk_size = 16384;
 
 	while (total_bytes_sent < h.filesize && running == 1) {
-		long would_send = h.filesize-total_bytes_sent;
-		long gonna_send = MIN(would_send, chunk_size);
-		if ((sent_bytes = sendfile(local_sockfd, fd, &total_bytes_sent, gonna_send)) < gonna_send) {
+		int64_t would_send = h.filesize-total_bytes_sent;
+		int64_t gonna_send = MIN(would_send, chunk_size);
+		// sendfile should automatically advance the file offset pointer for fd
+		if ((sent_bytes = sendfile(local_sockfd, fd, NULL, gonna_send)) < gonna_send) {
 			if (sent_bytes < 0) {
 				fprintf(stderr, "sendfile() failed: %s\n", strerror(errno)); 
 			}
@@ -154,7 +154,7 @@ static int send_file(char* filename) {
 			}
 			return -1;
 		}
-		total_bytes_sent_mirror = total_bytes_sent;
+		total_bytes_sent += gonna_send;
 	}
 
 	if (progress_bar_flag == 1) {

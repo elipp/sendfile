@@ -99,13 +99,11 @@ static int consolidate(int out_sockfd, int flag) {
 static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesize) {
 
 	int64_t total_bytes_processed = 0;	
-	static int64_t bytes_processed_mirror;	// splice on 32-bit linux requires __off64_t* as fourth argument
-	bytes_processed_mirror = total_bytes_processed;
 
 	struct _timer timer = timer_construct();
 
 	if (progress_bar_flag == 1) {
-		p = construct_pstruct(&bytes_processed_mirror, filesize, &timer, &running);
+		p = construct_pstruct(&total_bytes_processed, filesize, &timer, &running);
 		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	}
 
@@ -145,7 +143,6 @@ static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesi
 			bytes_in_pipe -= bytes_written;
 
 		}
-		bytes_processed_mirror = total_bytes_processed;
 	}
 	if (total_bytes_processed != filesize) {
 		fprintf(stderr, "warning: total_bytes_processed != filesize!\n");
