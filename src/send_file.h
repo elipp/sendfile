@@ -106,6 +106,7 @@ void print_ip_addresses() {
 	struct ifaddrs *addrs_iter = NULL;
 
 	getifaddrs(&addrs);
+	if (!addrs) { fprintf(stderr, "getifaddrs failed (no interfaces -> not connected)!\n"); return; }
 
 	printf("IP addresses for local interfaces via getifaddrs (local loopback lo excluded):\n\n");
 	char ip_buf[INET_ADDRSTRLEN];	
@@ -238,13 +239,13 @@ int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
 }
 
 typedef struct _progress_struct {
-	const off_t *cur_bytes;
+	const int64_t *cur_bytes;
 	int64_t total_bytes;
 	const struct _timer *timer;
 	const int *running_flag;
 } progress_struct;
 
-progress_struct construct_pstruct(const off_t *cur_bytes_addr, int64_t total_bytes, const struct _timer *timer, const int *running_flag_addr) {
+progress_struct construct_pstruct(const int64_t *cur_bytes_addr, int64_t total_bytes, const struct _timer *timer, const int *running_flag_addr) {
 	progress_struct p;
 
 	p.cur_bytes = cur_bytes_addr;
@@ -255,7 +256,7 @@ progress_struct construct_pstruct(const off_t *cur_bytes_addr, int64_t total_byt
 	return p;
 }
 
-void print_progress(off_t cur_bytes, int64_t total_bytes, const struct _timer *timer) {
+void print_progress(int64_t cur_bytes, int64_t total_bytes, const struct _timer *timer) {
 	
 	#ifdef __linux__
 	static const char* esc_composite_clear_line_reset_left = "\r\033[0K";	// ANSI X3.64 magic
@@ -273,7 +274,7 @@ void print_progress(off_t cur_bytes, int64_t total_bytes, const struct _timer *t
 	static const float MB_us_coeff = 1000000.0/1048576.0;
 
 	float rate = MB_us_coeff*((float)cur_bytes)/timer->get_us(timer);	
-	printf("%lu/%" PRId64 " bytes transferred (%.2f %%, %.2f MB/s)", cur_bytes, total_bytes, progress, rate);
+	printf("%lld/%lld bytes transferred (%.2f %%, %.2f MB/s)", (long long)cur_bytes, (long long)total_bytes, progress, rate);
 	fflush(stdout);
 
 }

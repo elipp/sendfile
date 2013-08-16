@@ -131,11 +131,12 @@ static int send_file(char* filename) {
 	// else we're free to start blasting ze file data
 	printf("Starting sendfile().\n");
 	off_t total_bytes_sent = 0;
+	static int64_t total_bytes_sent_mirror = 0;
 
 	struct _timer timer = timer_construct();
 	
 	if (progress_bar_flag == 1) {
-		p = construct_pstruct(&total_bytes_sent, h.filesize, &timer, &running);
+		p = construct_pstruct(&total_bytes_sent_mirror, h.filesize, &timer, &running);
 		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	}
 
@@ -153,6 +154,7 @@ static int send_file(char* filename) {
 			}
 			return -1;
 		}
+		total_bytes_sent_mirror = total_bytes_sent;
 	}
 
 	if (progress_bar_flag == 1) {
