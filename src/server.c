@@ -383,6 +383,13 @@ int main(int argc, char* argv[]) {
 		// inform the client program that they can start blasting dat file data
 		consolidate(remote_sockfd, HANDSHAKE_OK);
 
+		/*
+		int rcvbuf_size = 64*1024 - 1;
+		if (setsockopt(remote_sockfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf_size, sizeof(rcvbuf_size)) < 0) {
+			fprintf(stderr, "Warning: setsockopt SO_RCVBUF->%d failed: %s\n", rcvbuf_size, strerror(errno));
+		}
+		*/
+
 		int64_t ret;
 		if ((ret = recv_file(remote_sockfd, pipefd, outfile_fd, h.filesize)) < h.filesize) {
 			if (ret < 0) {

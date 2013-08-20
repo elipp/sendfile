@@ -144,7 +144,7 @@ static int send_file(char* filename) {
 	while (total_bytes_sent < h.filesize && running == 1) {
 		int64_t would_send = h.filesize-total_bytes_sent;
 		int64_t gonna_send = MIN(would_send, chunk_size);
-		// sendfile should automatically advance the file offset pointer for fd
+		// sendfile should automatically increment the file offset pointer for fd
 		if ((sent_bytes = sendfile(local_sockfd, fd, NULL, gonna_send)) < gonna_send) {
 			if (sent_bytes < 0) {
 				fprintf(stderr, "sendfile() failed: %s\n", strerror(errno)); 
@@ -290,13 +290,21 @@ int main(int argc, char* argv[]) {
 
 	socklen_t remote_saddr_len = sizeof(remote_saddr);
 
+	/*int sndbuf_size = 64*1024 - 1;
+	if (setsockopt(local_sockfd, SOL_SOCKET, SO_SNDBUF, &sndbuf_size, sizeof(sndbuf_size)) < 0) {
+		fprintf(stderr, "Warning: setsockopt SO_SNDBUF->%d failed: %s\n", sndbuf_size, strerror(errno));
+	}*/
+
 	if (connect(local_sockfd, (struct sockaddr*) &remote_saddr, remote_saddr_len) < 0) {
 		fprintf(stderr, "connect failed: %s\n", strerror(errno));
 		rval = 1;
 		goto cleanup_and_exit;
 	}
 
+	
+
 	running = 1;
+
 	if (send_file(filename) < 0) {
 		fprintf(stderr, "send_file failure.\n");
 		rval = 1;
