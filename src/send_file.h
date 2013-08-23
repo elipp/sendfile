@@ -153,7 +153,6 @@ void print_ip_addresses() {
 void *my_mmap_readonly_shared(int opened_fd, int64_t filesize, HANDLE *fm) {
 		unsigned char* block = (unsigned char*)mmap(NULL, filesize, PROT_READ, MAP_SHARED, opened_fd, 0);
 		if (block == MAP_FAILED) { 
-			fprintf(stderr, "mmap() failed: %s\n", strerror(errno)); 
 			return NULL;
 		}
 		else { 
@@ -225,17 +224,10 @@ int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
 	int i = 0;
 	for (; i < SHA_DIGEST_LENGTH; ++i) {
 		if (sha1_a[i] != sha1_b[i]) {
-			fprintf(stderr, "WARNING! sha1 mismatch!\n");
 			return -1;
 		}
 	}
-	printf("sha1 sums match! =)\n");
-	printf("expected \t");
-	print_sha1(sha1_a);
-	printf(",\ngot \t\t");
-	print_sha1(sha1_b);
-	printf(".\n\n");
-	return 1;
+		return 1;
 }
 
 typedef struct _progress_struct {

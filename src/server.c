@@ -15,6 +15,8 @@
 
 static int local_sockfd = -1;
 static int remote_sockfd = -1;
+static int outfile_fd = -1;
+static int pipefd[2] = { -1, -1 };
 
 static int allow_checksum_skip_flag = 0;
 static int always_accept_flag = 0;
@@ -25,13 +27,21 @@ static int progress_bar_flag = 1;
 static progress_struct p;
 static pthread_t progress_thread;
 
+#define FD_CLOSE_VALID(fd) do {\
+	if (fd != -1) { close(fd); }\
+	fd = -1;\
+	} while(0)
+
+static void reset_state() {
+	FD_CLOSE_VALID(remote_sockfd);
+	FD_CLOSE_VALID(outfile_fd);
+	FD_CLOSE_VALID(pipefd[1]);
+	FD_CLOSE_VALID(pipefd[0]);
+}
+
 static void cleanup() {
-	running = 0;
-	close(local_sockfd);
-	if (remote_sockfd != -1) {
-		close(remote_sockfd);
-	}
-	exit(1);
+	FD_CLOSE_VALID(local_sockfd);
+	reset_state();
 }
 
 static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
@@ -109,7 +119,7 @@ static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesi
 
 	while (total_bytes_processed < filesize && running == 1) {
 //		static const int max_chunksize = 16384;
-		static const int64_t max_chunksize = 8*1024;
+		static const int64_t max_chunksize = 12*1024;
 		static const int spl_flag = SPLICE_F_MORE | SPLICE_F_MOVE;
 
 		int64_t bytes_recv = 0;
@@ -123,9 +133,9 @@ static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesi
 		splice(sockfd, NULL, pipefd[1], NULL, gonna_process, spl_flag)) <= 0) {
 			if (bytes < 0) {
 				fprintf(stderr, "\nsocket->pipe_write splice returned %lld : %s. (connection aborted by client?)\n", (long long)bytes_recv, strerror(errno));
-				cleanup();
+				return -1;
 			}
-			else { fprintf(stderr, "warning: a 0-byte socket->pipe_write splice has occurred!\n"); }
+			else fprintf(stderr, "warning: a 0-byte socket->pipe_write splice has occurred!\n"); 
 		}
 		// splice from pipe read head to file fd
 		bytes_recv += bytes;
@@ -137,11 +147,9 @@ static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesi
 			if ((bytes_written = 
 			splice(pipefd[0], NULL, outfile_fd, &total_bytes_processed, bytes_in_pipe, spl_flag)) <= 0) {
 				fprintf(stderr, "\npipe_read->file_fd splice returned %lld: %s\n", (long long)bytes_written, strerror(errno));
-				cleanup();
+				return -1;
 			}
-
 			bytes_in_pipe -= bytes_written;
-
 		}
 	}
 	if (total_bytes_processed != filesize) {
@@ -206,7 +214,7 @@ void signal_handler(int sig) {
 	if (sig == SIGINT) {
 		fprintf(stderr, "\nReceived SIGINT. Aborting.\n");
 		cleanup();
-
+		exit(2);
 	}
 }
 
@@ -295,27 +303,17 @@ int main(int argc, char* argv[]) {
 
 	char handshake_buffer[128];
 
-
 	running = 1;
 
-	#define DO_CLEANUP_RETURN(retval) do {\
-	 close(remote_sockfd);\
-	 close(outfile_fd);\
-	 return (retval);\
-	} while(0)
-
-
-	int outfile_fd = -1;
 	while (running == 1) {
 		fprintf(stderr, "\nListening for incoming connections.\n");
-
-		remote_sockfd = -1;
-		outfile_fd = -1;
 
 		socklen_t remote_saddr_size = sizeof(remote_saddr);
 		remote_sockfd = accept(local_sockfd, (struct sockaddr *) &remote_saddr, &remote_saddr_size);
 		if (remote_sockfd < 0) {
 			fprintf(stderr, "warning: accept() failed: %s\n", strerror(errno));
+			reset_state();
+			continue;
 		}
 
 		char ip_buf[32];
@@ -324,9 +322,11 @@ int main(int argc, char* argv[]) {
 
 		int received_bytes = 0;	
 		int handshake_len = recv(remote_sockfd, handshake_buffer, sizeof(handshake_buffer), 0);
-		if (handshake_len < 0) {
-			fprintf(stderr, "error: handshake_len <= 0: %s\n", strerror(errno));
-			close(remote_sockfd); 
+
+		if (handshake_len <= 0) {
+			if (handshake_len < 0) fprintf(stderr, "error: recv: %s\n", strerror(errno));
+			else fprintf(stderr, "recv: remote has performed an orderly shutdown.\n"); 
+			reset_state();
 			continue;
 		}
 		received_bytes += handshake_len;
@@ -334,7 +334,8 @@ int main(int argc, char* argv[]) {
 		if (validate_protocol_welcome_header(handshake_buffer, handshake_len) < 0) {
 			fprintf(stderr, "warning: validate_protocol_welcome_header failed!\n");
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			DO_CLEANUP_RETURN(-1);
+			reset_state();
+			continue;
 		}
 
 		HEADERINFO h;
@@ -342,46 +343,50 @@ int main(int argc, char* argv[]) {
 		if (get_headerinfo(handshake_buffer, handshake_len, &h) < 0) {
 			fprintf(stderr, "error: headerinfo error!\n");
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			DO_CLEANUP_RETURN(-1);
+			reset_state();
+			continue;
 		}
 
 		if (h.sha1_included == 0 && allow_checksum_skip_flag == 0) {
 			fprintf(stderr, "error: client didn't provide a sha1 hash for the input file (-c was used; use -c on the server to allow this). Rejecting.\n");
 			consolidate(remote_sockfd, HANDSHAKE_CHECKSUM_REQUIRED);
-			DO_CLEANUP_RETURN(-1);
+			reset_state();
+			continue;
 		}
-
-		int pipefd[2];
 
 		if (pipe(pipefd) < 0) {
 			fprintf(stderr, "pipe() error: %s\n", strerror(errno));
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			DO_CLEANUP_RETURN(-1);
+			cleanup();
+			return 1;
 		}
 
-		char *name = get_available_filename(h.filename);
+		char *out_name = get_available_filename(h.filename);
 
 		fprintf(stderr, "The client wants to send the file %s (size %.2f MB).\n", h.filename, get_megabytes(h.filesize)); 
 
 		if (always_accept_flag == 0) {
 			if (!ask_user_consent()) { 
 				consolidate(remote_sockfd, HANDSHAKE_DENIED); 
-				DO_CLEANUP_RETURN(-1);
+				free(out_name);
+				reset_state();
+				continue;
 			}
 		}
 
-		fprintf(stderr, "Writing to output file %s.\n\n", name);
-		outfile_fd = open(name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-		free(name);
+		fprintf(stderr, "Writing to output file %s.\n\n", out_name);
+		outfile_fd = open(out_name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 
 		if (outfile_fd < 0) {
-			fprintf(stderr, "open() failed (errno: %s).\n", strerror(errno));
+			fprintf(stderr, "open()ing output file %s failed: %s.\n", out_name, strerror(errno));
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			DO_CLEANUP_RETURN(-1);
+			cleanup();
+			return 1;
 		}
 
+		free(out_name);
+
 		// inform the client program that they can start blasting dat file data
-		consolidate(remote_sockfd, HANDSHAKE_OK);
 
 		/*
 		int rcvbuf_size = 64*1024 - 1;
@@ -389,6 +394,8 @@ int main(int argc, char* argv[]) {
 			fprintf(stderr, "Warning: setsockopt SO_RCVBUF->%d failed: %s\n", rcvbuf_size, strerror(errno));
 		}
 		*/
+
+		consolidate(remote_sockfd, HANDSHAKE_OK);
 
 		int64_t ret;
 		if ((ret = recv_file(remote_sockfd, pipefd, outfile_fd, h.filesize)) < h.filesize) {
@@ -398,11 +405,16 @@ int main(int argc, char* argv[]) {
 			else {
 				fprintf(stderr, "recv_file: warning: received data size (%lld) is less than expected (%lld)!\n", (long long)ret, (long long)h.filesize);
 			}
-			DO_CLEANUP_RETURN(-1);
+			reset_state();
+			continue;
 		}
 		
 		unsigned char *block = (unsigned char*)my_mmap_readonly_shared(outfile_fd, h.filesize, NULL);
-		if (!block) { close(outfile_fd); return -1; }
+		if (!block) { 
+			fprintf(stderr, "mmap() failed: %s\n", strerror(errno)); 
+			cleanup();
+			return 1; 
+		}
 
 		if (h.sha1_included && allow_checksum_skip_flag == 0) {
 			fprintf(stderr, "Calculating sha1 sum...\n\n");
@@ -410,8 +422,15 @@ int main(int argc, char* argv[]) {
 			munmap(block, h.filesize);
 			
 			if (compare_sha1(h.sha1, sha1_received) < 0) {
+				fprintf(stderr, "WARNING! sha1 mismatch!\n");
 				return 1;
 			}
+
+			printf("sha1 sums match! =)\nexpected \t");
+			print_sha1(h.sha1);
+			printf(",\ngot \t\t");
+			print_sha1(sha1_received);
+			printf(".\n\n");
 
 			free(sha1_received);
 		}
@@ -421,9 +440,11 @@ int main(int argc, char* argv[]) {
 		printf("Success.\n");
 
 		free(h.filename);
+		reset_state();
 
 	}
 
-	DO_CLEANUP_RETURN(0);
+	cleanup();
+	return 0;
 
 }
