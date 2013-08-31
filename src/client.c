@@ -55,12 +55,12 @@ static int send_file(char* filename) {
 		printf("(skipping checksum calculation)\n");
 	}
 	else {
-		unsigned char* block = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-		if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed %s\n", strerror(errno)); return -1; }
+		//unsigned char* block = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+		//if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed %s\n", strerror(errno)); return -1; }
 		printf("Calculating sha1 sum of input file...\n");
-		unsigned char *sha1 = get_sha1(block, h.filesize);
+		unsigned char *sha1 = get_sha1(filename, h.filesize);
 		memcpy(h.sha1, sha1, SHA_DIGEST_LENGTH);
-		munmap(block, h.filesize);
+//		munmap(block, h.filesize);
 
 		printf("Done! (got ");
 		print_sha1(sha1);
@@ -128,7 +128,14 @@ static int send_file(char* filename) {
 			break;
 	}
 	
+
+#define JOIN_PROGRESS_THREAD_RETURN(retval) do {\
+       	running = 0;\
+	if (progress_bar_flag == 1) pthread_join(progress_thread, NULL);\
+       	return (retval); } while(0)
+
 	// else we're free to start blasting ze file data
+
 	printf("Starting sendfile().\n");
 	int64_t total_bytes_sent = 0;
 
@@ -139,20 +146,18 @@ static int send_file(char* filename) {
 		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	}
 
-	static const long chunk_size = 16384;
-
 	while (total_bytes_sent < h.filesize && running == 1) {
 		int64_t would_send = h.filesize-total_bytes_sent;
-		int64_t gonna_send = MIN(would_send, chunk_size);
+		int64_t gonna_send = MIN(would_send, CHUNK_SIZE);
 		// sendfile should automatically increment the file offset pointer for fd
 		if ((sent_bytes = sendfile(local_sockfd, fd, NULL, gonna_send)) < gonna_send) {
 			if (sent_bytes < 0) {
-				fprintf(stderr, "sendfile() failed: %s\n", strerror(errno)); 
+				fprintf(stderr, "\nsendfile() failed: %s\n", strerror(errno)); 
 			}
 			else {
-				fprintf(stderr, "sent_bytes < filesize (!), transfer cancelled by remote.\n");
+				fprintf(stderr, "\nwarning: sent_bytes < gonna_send! (transfer cancelled by remote?)");
 			}
-			return -1;
+			JOIN_PROGRESS_THREAD_RETURN(-1);
 		}
 		total_bytes_sent += gonna_send;
 	}
@@ -165,8 +170,12 @@ static int send_file(char* filename) {
 
 	double seconds = timer.get_us(&timer)/1000000.0;
 	double MBs = get_megabytes(total_bytes_sent)/seconds;
+	double percent = 100.0*(double)total_bytes_sent/(double)h.filesize;
 
-	fprintf(stderr, "\nReceived %.2f MB in %.3f seconds (%.2f MB/s).\n\n", get_megabytes(total_bytes_sent), seconds, MBs);
+	fprintf(stderr, "\nSent %.2f MB of %.2f MB (%.2f%%) in %.3f seconds (%.2f MB/s).\n\n", 
+	get_megabytes(total_bytes_sent), 
+	get_megabytes(h.filesize),
+	percent, seconds, MBs);
 
 	return 0;
 

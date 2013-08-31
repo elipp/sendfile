@@ -40,8 +40,8 @@ static void reset_state() {
 }
 
 static void cleanup() {
-	FD_CLOSE_VALID(local_sockfd);
 	reset_state();
+	FD_CLOSE_VALID(local_sockfd);
 }
 
 static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
@@ -105,7 +105,6 @@ static int consolidate(int out_sockfd, int flag) {
 }
 
 
-
 static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesize) {
 
 	int64_t total_bytes_processed = 0;	
@@ -117,25 +116,34 @@ static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesi
 		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
 	}
 
+#define JOIN_PROGRESS_THREAD_RETURN(retval) do {\
+       	running = 0;\
+	if (progress_bar_flag == 1) pthread_join(progress_thread, NULL);\
+       	return (retval); } while(0)
+
 	while (total_bytes_processed < filesize && running == 1) {
 //		static const int max_chunksize = 16384;
-		static const int64_t max_chunksize = 12*1024;
 		static const int spl_flag = SPLICE_F_MORE | SPLICE_F_MOVE;
 
 		int64_t bytes_recv = 0;
 		int64_t bytes = 0;
 
 		int64_t would_process = filesize - total_bytes_processed;
-	       	int64_t gonna_process = MIN(would_process, max_chunksize);
+	       	int64_t gonna_process = MIN(would_process, CHUNK_SIZE);
 
 		// splice to pipe write head
 		if ((bytes = 
 		splice(sockfd, NULL, pipefd[1], NULL, gonna_process, spl_flag)) <= 0) {
 			if (bytes < 0) {
 				fprintf(stderr, "\nsocket->pipe_write splice returned %lld : %s. (connection aborted by client?)\n", (long long)bytes_recv, strerror(errno));
-				return -1;
+
+				JOIN_PROGRESS_THREAD_RETURN(-1);
 			}
-			else fprintf(stderr, "warning: a 0-byte socket->pipe_write splice has occurred!\n"); 
+			else {
+				fprintf(stderr, "\nwarning: a 0-byte socket->pipe_write splice has occurred!\n (connection aborted by client?)"); 
+				JOIN_PROGRESS_THREAD_RETURN(-1);
+
+			}
 		}
 		// splice from pipe read head to file fd
 		bytes_recv += bytes;
@@ -147,24 +155,26 @@ static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesi
 			if ((bytes_written = 
 			splice(pipefd[0], NULL, outfile_fd, &total_bytes_processed, bytes_in_pipe, spl_flag)) <= 0) {
 				fprintf(stderr, "\npipe_read->file_fd splice returned %lld: %s\n", (long long)bytes_written, strerror(errno));
-				return -1;
+				JOIN_PROGRESS_THREAD_RETURN(-1);
 			}
 			bytes_in_pipe -= bytes_written;
 		}
 	}
 	if (total_bytes_processed != filesize) {
-		fprintf(stderr, "warning: total_bytes_processed != filesize!\n");
+		fprintf(stderr, "\nwarning: total_bytes_processed != filesize!\n");
 	}
 	
 	if (progress_bar_flag == 1) {
 		pthread_join(progress_thread, NULL);
 	}
 
-
 	double seconds = timer.get_us(&timer)/1000000.0;
 	double MBs = get_megabytes(total_bytes_processed)/seconds;
+	double percent = 100.0*(double)total_bytes_processed/(double)filesize;
 
-	fprintf(stderr, "\nReceived %.2f MB in %.3f seconds (%.2f MB/s).\n\n", get_megabytes(total_bytes_processed), seconds, MBs);
+	fprintf(stderr, "\nReceived %.2f MB of %.2f MB (%.2f%%) in %.3f seconds (%.2f MB/s).\n\n", 
+	get_megabytes(total_bytes_processed), 
+	get_megabytes(filesize), percent, seconds, MBs);
 
 	return total_bytes_processed;
 
@@ -400,7 +410,7 @@ int main(int argc, char* argv[]) {
 		int64_t ret;
 		if ((ret = recv_file(remote_sockfd, pipefd, outfile_fd, h.filesize)) < h.filesize) {
 			if (ret < 0) {
-				fprintf(stderr, "recv_file failure.\n");
+				fprintf(stderr, "\nrecv_file failure.\n");
 			}
 			else {
 				fprintf(stderr, "recv_file: warning: received data size (%lld) is less than expected (%lld)!\n", (long long)ret, (long long)h.filesize);
@@ -409,17 +419,11 @@ int main(int argc, char* argv[]) {
 			continue;
 		}
 		
-		unsigned char *block = (unsigned char*)my_mmap_readonly_shared(outfile_fd, h.filesize, NULL);
-		if (!block) { 
-			fprintf(stderr, "mmap() failed: %s\n", strerror(errno)); 
-			cleanup();
-			return 1; 
-		}
+		close(outfile_fd);
 
 		if (h.sha1_included && allow_checksum_skip_flag == 0) {
 			fprintf(stderr, "Calculating sha1 sum...\n\n");
-			unsigned char* sha1_received = get_sha1(block, h.filesize);
-			munmap(block, h.filesize);
+			unsigned char* sha1_received = get_sha1(h.filename, h.filesize);
 			
 			if (compare_sha1(h.sha1, sha1_received) < 0) {
 				fprintf(stderr, "WARNING! sha1 mismatch!\n");
