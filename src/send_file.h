@@ -15,7 +15,7 @@ extern const int32_t protocol_id;
 #ifdef _WIN32
 #define CHUNK_SIZE (1024*1024)	// TransmitFile performs a LOT better this way ^_^
 #elif __linux__
-#define CHUNK_SIZE (8*1024)		// splice() on the other hand has a limit at 16384 for chunk size O_o
+#define CHUNK_SIZE (12*1024)		// splice() on the other hand has a limit at 16384 for chunk size O_o
 #endif
 
 #define DEFAULT_PORT 51337
