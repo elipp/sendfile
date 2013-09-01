@@ -1,51 +1,23 @@
 #ifndef SEND_FILE_H
 #define SEND_FILE_H
 
-#include <openssl/sha.h>
-#include <stdint.h>
-
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <MSWSock.h>
-#include <Windows.h>
-#include <process.h>
-#define SLEEP_S(seconds) Sleep((1000*(seconds)))
-#elif __linux__
-
-#include <ctype.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <signal.h>
-#include <inttypes.h>
-#include <libgen.h>
-#define SLEEP_S(seconds) sleep((seconds))
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-
-#ifndef __USE_GNU
-#define __USE_GNU // for splice constants, SPLICE_F_MOVE, SPLICE_F_MORE
-#endif
-#include <fcntl.h>
-
-#endif
-
+#include "non_portable_stuff.h"
 #include "timer.h"
+
+#include <openssl/sha.h>
 
 #ifndef MAX_HOSTNAME_LEN
 #define MAX_HOSTNAME_LEN 255 // arbitrary
 #endif
 
 const int32_t protocol_id = 0x0d355480;
-const int64_t CHUNK_SIZE = 8*1024;
+#ifdef _WIN32
+#define CHUNK_SIZE (1024*1024)	// TransmitFile performs a LOT better this way ^_^
+#elif __linux__
+#define CHUNK_SIZE (8*1024)		// splice() on the other hand has a limit at 16384 for chunk size O_o
+#endif
 
 #define DEFAULT_PORT 51337
-unsigned short port = DEFAULT_PORT;
 
 #define HANDSHAKE_FAIL 0
 #define HANDSHAKE_OK 1
@@ -87,9 +59,7 @@ unsigned short port = DEFAULT_PORT;
 	printf("\n");\
 } while(0)
 
-double get_megabytes(int64_t bytes) {
-	return (bytes)/(1048576.0);
-}
+
 
 typedef struct _HEADERINFO {
 	int64_t filesize;
@@ -99,114 +69,6 @@ typedef struct _HEADERINFO {
 	unsigned char sha1[SHA_DIGEST_LENGTH];
 } HEADERINFO;
 
-
-#ifdef __linux__
-void print_ip_addresses() {
-
-	struct ifaddrs *addrs = NULL;
-	struct ifaddrs *addrs_iter = NULL;
-
-	getifaddrs(&addrs);
-	if (!addrs) { fprintf(stderr, "getifaddrs failed (no interfaces -> not connected)!\n"); return; }
-
-	printf("IP addresses for local interfaces via getifaddrs (local loopback lo excluded):\n\n");
-	char ip_buf[INET_ADDRSTRLEN];	
-	for (addrs_iter = addrs; addrs_iter != NULL; addrs_iter = addrs_iter->ifa_next) {
-		if (addrs_iter->ifa_addr->sa_family == AF_INET) {	// the other option would be AF_INET6, but never mind 
-			if (strcmp(addrs_iter->ifa_name, "lo") == 0) { continue; } // we don't really care about local loopback here
-			inet_ntop(AF_INET, &((struct sockaddr_in *)addrs_iter->ifa_addr)->sin_addr, ip_buf, INET_ADDRSTRLEN);
-			printf("interface %s ip: \033[1m%s\033[m\n", addrs_iter->ifa_name, ip_buf);
-		} 
-	}
-	if (addrs != NULL) { 
-		freeifaddrs(addrs);
-	}
-
-}
-
-#elif _WIN32
-
-void print_ip_addresses() {
-	char hostname[MAX_HOSTNAME_LEN];
-	if (gethostname(hostname, sizeof(hostname)) == SOCKET_ERROR) {
-		fprintf(stderr, "error retrieving host name! (error %x)\n", GetLastError());
-		return;
-	}
-	printf("hostname: %s\n", hostname);
-	struct hostent *phe = (struct hostent*)gethostbyname(hostname);
-
-	if (!phe) {
-		fprintf(stderr, "gethostbyname failed!\n (error %x)\n", GetLastError());
-		return;
-	}
-
-	printf("IP addresses for local interfaces via gethostbyname:\n\n");
-	for (int i = 0; phe->h_addr_list[i] != NULL; ++i) {
-		struct in_addr addr;
-		memcpy(&addr, phe->h_addr_list[i], sizeof(struct in_addr));
-		printf("%d - ip: %s\n", i, inet_ntoa(addr));
-	}
-}
-#endif
-
-#ifdef __linux__
-#define HANDLE int64_t*
-void *my_mmap_readonly_shared(int opened_fd, int64_t filesize, HANDLE *fm) {
-	unsigned char* block = (unsigned char*)mmap(NULL, filesize, PROT_READ, MAP_SHARED, opened_fd, 0);
-	if (block == MAP_FAILED) { 
-		return NULL;
-	}
-	else { 
-		return block; 
-	}
-}
-
-void my_munmap(void *block, int64_t size, HANDLE fm) {
-	munmap(block, size);
-}
-#elif _WIN32
-void *my_mmap_readonly_shared(HANDLE opened_filehandle, int64_t filesize, HANDLE *fm) {
-	*fm = CreateFileMapping(opened_filehandle, NULL, PAGE_READONLY, 0, 0, NULL);
-	if (*fm == INVALID_HANDLE_VALUE) { 
-		fprintf(stderr, "CreateFileMapping failed (error %x).\n", GetLastError());
-		return NULL;
-	}
-	void *block = MapViewOfFile(*fm, FILE_MAP_READ, 0, 0, 0);
-	if (!block) { 
-		fprintf(stderr, "MapViewOfFile failed (error %x).\n", GetLastError());
-		return NULL;
-	}
-	return block;
-}
-
-void my_munmap(void *block, int64_t size, HANDLE fm) {
-	UnmapViewOfFile(block);
-	CloseHandle(fm);
-}
-
-#endif
-
-#ifdef __linux__
-char *get_basename(char* full_filename) {
-	return basename(full_filename);
-}
-#elif _WIN32
-char *get_basename(char* full_filename) {
-	char filename_base[_MAX_FNAME];
-	char file_ext[_MAX_EXT];
-	_splitpath(NULL, NULL, NULL, filename_base, file_ext);
-	char basename[_MAX_FNAME+_MAX_EXT+1];
-	sprintf(basename, "%s.%s\0", filename_base, file_ext);
-
-	int filename_base_len = strlen(basename);
-	return _strdup(basename);
-}
-#endif
-
-static void sleep_ms(long ms) {
-	usleep(ms*1000);
-}
-
 #define SHA_HASH_CHUNKSIZE (16*1024*1024)
 typedef struct {
 	FILE *fp;
@@ -215,94 +77,6 @@ typedef struct {
 	int *read_done;
 } fread_ahead_arg_struct;
 
-void *fread_ahead(void *args) {
-	fread_ahead_arg_struct s = *(fread_ahead_arg_struct*)args;
-	long long i = 0;
-	while (i < s.num_runs) {
-		fread(s.alternating_buffers[i%2], sizeof(unsigned char), SHA_HASH_CHUNKSIZE, s.fp);
-		s.read_done[i%2] = 1;
-		++i;
-		while (s.read_done[i%2] == 1) {
-			sleep_ms(40);
-		}
-
-	}
-	return NULL;
-}
-
-unsigned char *get_sha1(const char* filename, uint64_t bufsize) {
-	FILE *fp = fopen(filename, "rb");
-	if (!fp) { 
-		fprintf(stderr, "fopen(%s, \"rb\") failed!: %s\n:", filename, strerror(errno)); 
-		return NULL; 
-	}
-	// mmap() has a ~2.8GB limitation on 32-bit linux, so a chunk-based approach must be taken
-	SHA_CTX ctx;
-	SHA1_Init(&ctx);
-
-	long long num_full_chunks = bufsize/SHA_HASH_CHUNKSIZE;
-	long long excess = bufsize%SHA_HASH_CHUNKSIZE;
-	int read_done[2] = {0, 0};
-
-	pthread_t fread_thread;
-	fread_ahead_arg_struct s;
-	s.fp = fp;
-	s.num_runs = num_full_chunks;
-	s.alternating_buffers[0] = malloc(SHA_HASH_CHUNKSIZE);
-	s.alternating_buffers[1] = malloc(SHA_HASH_CHUNKSIZE);
-	s.read_done = read_done;
-
-	if (!(s.alternating_buffers[0] && s.alternating_buffers[1])) {
-		fprintf(stderr, "get_sha1: malloc failed!:%s\n", strerror(errno));
-		return NULL;
-	}
-
-	long long i = 0;
-	pthread_create(&fread_thread, NULL, fread_ahead, &s);
-	while (i < num_full_chunks) {
-		while (read_done[i%2] == 0) {
-			sleep_ms(40);
-		}
-		SHA1_Update(&ctx, s.alternating_buffers[i%2], SHA_HASH_CHUNKSIZE);
-		read_done[i%2] = 0;
-		++i;
-	}
-
-	pthread_join(fread_thread, NULL);
-
-	fread(s.alternating_buffers[0], sizeof(unsigned char), excess, fp);
-	SHA1_Update(&ctx, s.alternating_buffers[0], excess);
-
-	free(s.alternating_buffers[0]);
-	free(s.alternating_buffers[1]);
-
-	unsigned char *outbuf = (unsigned char*)malloc(SHA_DIGEST_LENGTH);
-	SHA1_Final(outbuf, &ctx);
-	return outbuf;
-}
-
-void print_sha1(const unsigned char *sha1) {
-	char tmpbuf[64];
-	int i = 0;
-	int offset = 0;
-	for (; i < SHA_DIGEST_LENGTH; ++i) {
-		sprintf(tmpbuf + offset, "%02x", sha1[i]);
-		offset += 2;
-	}
-	tmpbuf[offset+1] = '\0';
-	printf("%s", tmpbuf);
-}
-
-int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
-	int i = 0;
-	for (; i < SHA_DIGEST_LENGTH; ++i) {
-		if (sha1_a[i] != sha1_b[i]) {
-			return -1;
-		}
-	}
-	return 1;
-}
-
 typedef struct _progress_struct {
 	const int64_t *cur_bytes;
 	int64_t total_bytes;
@@ -310,62 +84,27 @@ typedef struct _progress_struct {
 	const int *running_flag;
 } progress_struct;
 
-progress_struct construct_pstruct(const int64_t *cur_bytes_addr, int64_t total_bytes, const struct _timer *timer, const int *running_flag_addr) {
-	progress_struct p;
-
-	p.cur_bytes = cur_bytes_addr;
-	p.total_bytes = total_bytes;
-	p.timer = timer;
-	p.running_flag = running_flag_addr;
-
-	return p;
-}
-
-void print_progress(int64_t cur_bytes, int64_t total_bytes, const struct _timer *timer) {
+void print_ip_addresses();
 
 #ifdef __linux__
-	static const char* esc_composite_clear_line_reset_left = "\r\033[0K";	// ANSI X3.64 magic
+void *fread_ahead(void *args);
 #elif _WIN32
-	static const char *esc_composite_clear_line_reset_left = "\r";	// will have to do :(
-#endif	
+unsigned __stdcall fread_ahead(void *args);
+#endif
 
-	UNBUFFERED_PRINTF("%s", esc_composite_clear_line_reset_left);
+double get_megabytes(int64_t bytes);
+unsigned char *get_sha1(const char* filename, uint64_t bufsize);
+void print_sha1(const unsigned char *sha1);
+int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b);
 
-	float progress = 100*(float)(cur_bytes)/(float)(total_bytes);
+progress_struct construct_pstruct(const int64_t *cur_bytes_addr, int64_t total_bytes, const struct _timer *timer, const int *running_flag_addr);
 
-	// MB/s = (bytes/2^20) : (microseconds/1000000)
-	// == (bytes/1048576) * (1000000/microseconds)
-	// == (1000000/1048576) * (bytes/microseconds)
-	static const float MB_us_coeff = 1000000.0/1048576.0;
-
-	float rate = MB_us_coeff*((float)cur_bytes)/timer->get_us(timer);	
-	printf("%lld/%lld bytes transferred (%.2f %%, %.2f MB/s)", (long long)cur_bytes, (long long)total_bytes, progress, rate);
-	fflush(stdout);
-
-}
+void print_progress(int64_t cur_bytes, int64_t total_bytes, const struct _timer *timer);
 
 #ifdef __linux__	// for pthreads, the signature is void(*)(void*)
-void *progress_callback(void *progress) {
+void *progress_callback(void *progress);
 #elif _WIN32
-unsigned __stdcall progress_callback(void *progress) {
+unsigned __stdcall progress_callback(void *progress);
 #endif
-	progress_struct *p = (progress_struct*)progress;
-
-	while (*p->cur_bytes < p->total_bytes) {
-		off_t cur_bytes = *p->cur_bytes;
-		int64_t total_bytes = p->total_bytes;
-
-		if (*p->running_flag == 0) {
-			fprintf(stderr, "\nTransfer aborted!\n");
-			print_progress(cur_bytes, total_bytes, p->timer);
-			return NULL;
-		}
-
-		print_progress(cur_bytes, total_bytes, p->timer);
-		SLEEP_S(1);
-	}
-
-	return NULL;
-}
 
 #endif

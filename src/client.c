@@ -1,17 +1,9 @@
-#include <sys/sendfile.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <sys/stat.h>
-#include <string.h>
-#include <stdlib.h>
-#include <openssl/sha.h>
-#include <errno.h>
-#include <stdio.h>
-#include <sys/mman.h>
-#include <libgen.h>
-#include <sys/param.h>
-#include <pthread.h>
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS 1
+#define WIN32_LEAN_AND_MEAN
+#endif
 
+#include "non_portable_stuff.h"
 #include "send_file.h"
 
 static int local_sockfd;
@@ -19,8 +11,9 @@ static int running = 0;
 static int32_t checksum_flag = 1;
 
 static int progress_bar_flag = 1;
-pthread_t progress_thread;
+thread_struct progress_thread;
 static progress_struct p;
+static unsigned short port = DEFAULT_PORT;
 
 #define ACCUM_WRITE(var, buffer) do {\
 	memcpy((buffer)+accum, &(var), sizeof(var));\
@@ -40,27 +33,20 @@ static progress_struct p;
 
 static int send_file(char* filename) {
 
-	int fd = open(filename, O_RDONLY);
-	if (fd < 0) { fprintf(stderr, "send_handshake: opening file failed: %s\n", strerror(errno)); return -1; }
-
-	struct stat st;
-	fstat(fd, &st);
-
+	// just get the filesize
 	HEADERINFO h;
 	h.protocol_id = protocol_id;
-	h.filesize = st.st_size;
+	h.filesize = get_filesize(filename);
 	h.sha1_included = checksum_flag;
-
+	
 	if (!checksum_flag) {
 		printf("(skipping checksum calculation)\n");
 	}
 	else {
-		//unsigned char* block = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-		//if (block == MAP_FAILED) { fprintf(stderr, "mmap() failed %s\n", strerror(errno)); return -1; }
 		printf("Calculating sha1 sum of input file...\n");
 		unsigned char *sha1 = get_sha1(filename, h.filesize);
+		if (!sha1) { fprintf(stderr, "get_sha1 failed!\n"); return -1; }
 		memcpy(h.sha1, sha1, SHA_DIGEST_LENGTH);
-//		munmap(block, h.filesize);
 
 		printf("Done! (got ");
 		print_sha1(sha1);
@@ -69,10 +55,10 @@ static int send_file(char* filename) {
 		free(sha1);
 	}
 
-	h.filename = basename(filename);
+	h.filename = get_basename(filename);
 	int filename_base_len = strlen(h.filename);
 
-	printf("Input file \"%s\":\n basename: %s,\n filesize: %" PRId64"\n", filename, h.filename, h.filesize);
+	printf("Input file \"%s\":\n basename: %s,\n filesize: %lld\n", filename, h.filename, (long long)h.filesize);
 
 	char handshake_buffer[128];
 	
@@ -131,44 +117,44 @@ static int send_file(char* filename) {
 
 #define JOIN_PROGRESS_THREAD_RETURN(retval) do {\
        	running = 0;\
-	if (progress_bar_flag == 1) pthread_join(progress_thread, NULL);\
+	if (progress_bar_flag == 1) thread_join(&progress_thread);\
        	return (retval); } while(0)
 
 	// else we're free to start blasting ze file data
 
-	printf("Starting sendfile().\n");
+	printf("Starting file transmission.\n");
 	int64_t total_bytes_sent = 0;
 
 	struct _timer timer = timer_construct();
 	
 	if (progress_bar_flag == 1) {
 		p = construct_pstruct(&total_bytes_sent, h.filesize, &timer, &running);
-		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
+		thread_start(&progress_thread, progress_callback, (void*)&p);
 	}
 
+	NATIVE_FILEHANDLE fh = open_file_object_rb_native(filename);
+	if (NATIVE_FILEHANDLE_INVALID(fh)) {
+		return -1;
+	}
 	while (total_bytes_sent < h.filesize && running == 1) {
 		int64_t would_send = h.filesize-total_bytes_sent;
 		int64_t gonna_send = MIN(would_send, CHUNK_SIZE);
-		// sendfile should automatically increment the file offset pointer for fd
-		if ((sent_bytes = sendfile(local_sockfd, fd, NULL, gonna_send)) < gonna_send) {
-			if (sent_bytes < 0) {
-				fprintf(stderr, "\nsendfile() failed: %s\n", strerror(errno)); 
-			}
-			else {
-				fprintf(stderr, "\nwarning: sent_bytes < gonna_send! (transfer cancelled by remote?)");
-			}
+
+		if ((sent_bytes = send_chunk(local_sockfd, fh, gonna_send, total_bytes_sent)) < gonna_send) {
 			JOIN_PROGRESS_THREAD_RETURN(-1);
 		}
 		total_bytes_sent += gonna_send;
 	}
 
 	if (progress_bar_flag == 1) {
-		pthread_join(progress_thread, NULL);
+		thread_join(&progress_thread);
 	}
+
+	close_file_object_native(fh);
 
 	printf("\nFile transfer successful.\n");
 
-	double seconds = timer.get_us(&timer)/1000000.0;
+	double seconds = timer_get_us(&timer)/1000000.0;
 	double MBs = get_megabytes(total_bytes_sent)/seconds;
 	double percent = 100.0*(double)total_bytes_sent/(double)h.filesize;
 
@@ -192,29 +178,12 @@ void usage() {
 
 void cleanup() {
 	running = 0;
-	close(local_sockfd);	
+	CLOSE_SOCKET(local_sockfd);	
 }
-
-void signal_handler(int sig) {
-	if (sig == SIGINT) {
-		fprintf(stderr, "\nReceived SIGINT. Aborting.\n");
-		cleanup();
-		exit(1);
-	}
-}
-
 
 int main(int argc, char* argv[]) {
 
-	struct sigaction new_action, old_action;
-	new_action.sa_handler = signal_handler;
-	sigemptyset(&new_action.sa_mask);
-	new_action.sa_flags = 0;
-	sigaction(SIGINT, NULL, &old_action);
-
-	if (old_action.sa_handler != SIG_IGN) {
-		sigaction(SIGINT, &new_action, NULL);
-	}
+	setup_signal_handler(signal_handler);
 
 	int c;
 	char *strtol_endptr;
@@ -270,8 +239,14 @@ int main(int argc, char* argv[]) {
 		return 1;
 	}
 
-	char* remote_ipstr = strdup(argv[optind]);
-	char* filename = strdup(argv[optind+1]);
+#ifdef _WIN32
+	if (!init_WSOCK()) {
+		return -1;
+	}
+#endif
+
+	char* remote_ipstr = _strdup(argv[optind]);
+	char* filename = _strdup(argv[optind+1]);
 
 	struct sockaddr_in local_saddr, remote_saddr;
 	memset(&local_saddr, 0, sizeof(local_saddr));
@@ -283,14 +258,14 @@ int main(int argc, char* argv[]) {
 
 	local_sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (local_sockfd < 0) { 
-		fprintf(stderr, "socket() failed\n"); 
+		PRINT_SOCKET_ERROR("socket()");
 		rval = 1; 
 		goto cleanup_and_exit;
 	}
 
 	remote_saddr.sin_family = AF_INET;
 	if (inet_pton(AF_INET, remote_ipstr, &remote_saddr.sin_addr) <= 0) { 
-		fprintf(stderr, "inet_pton failed. invalid ip_string? (\"%s\")\n", remote_ipstr);
+		PRINT_SOCKET_ERROR("inet_pton()");
 		usage();
 		rval = 1;
 		goto cleanup_and_exit;
@@ -311,7 +286,6 @@ int main(int argc, char* argv[]) {
 	}
 
 	
-
 	running = 1;
 
 	if (send_file(filename) < 0) {
@@ -326,6 +300,8 @@ cleanup_and_exit:
 	free(filename);
 
 	cleanup();
+
+	system("pause");
 
 
 	return rval;

@@ -1,47 +1,32 @@
-#include <sys/sendfile.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <sys/stat.h>
-#include <string.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <sys/param.h>
-#include <stdio.h>
-#include <time.h>
-#include <sys/mman.h>
-#include <pthread.h>
-
 #include "send_file.h"
 
 static int local_sockfd = -1;
 static int remote_sockfd = -1;
-static int outfile_fd = -1;
-static int pipefd[2] = { -1, -1 };
+static NATIVE_FILEHANDLE outfile_fd;
 
 static int allow_checksum_skip_flag = 0;
 static int always_accept_flag = 0;
 
 static int running = 0;
+static unsigned short port = DEFAULT_PORT;
 
 static int progress_bar_flag = 1;
 static progress_struct p;
-static pthread_t progress_thread;
+static thread_struct progress_thread;
 
-#define FD_CLOSE_VALID(fd) do {\
-	if (fd != -1) { close(fd); }\
-	fd = -1;\
+#define CLOSE_VALID_FILEHANDLE(fd) do {\
+	if (!(NATIVE_FILEHANDLE_INVALID(fd))) { close_file_object_native(fd); }\
+	INVALIDATE_FILEHANDLE(fd);\
 	} while(0)
 
 static void reset_state() {
-	FD_CLOSE_VALID(remote_sockfd);
-	FD_CLOSE_VALID(outfile_fd);
-	FD_CLOSE_VALID(pipefd[1]);
-	FD_CLOSE_VALID(pipefd[0]);
+	CLOSE_SOCKET(remote_sockfd);
+	CLOSE_VALID_FILEHANDLE(outfile_fd);
 }
 
-static void cleanup() {
+void cleanup() {
 	reset_state();
-	FD_CLOSE_VALID(local_sockfd);
+	CLOSE_SOCKET(local_sockfd);
 }
 
 static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
@@ -51,21 +36,6 @@ static int validate_protocol_welcome_header(const char* buf, size_t buf_size) {
 	if (id != protocol_id) { return -1; }
 	return 0;
 }
-
-static char *get_available_filename(const char* orig_filename) {
-	char name_buf[128];
-	strcpy(name_buf, orig_filename);
-	name_buf[strlen(orig_filename)] = '\0';
-	int num = 1;
-	while (access(name_buf, F_OK) != -1) {
-		// file exists, rename using the (#) scheme
-		int bytes = sprintf(name_buf, "%s(%d)", orig_filename, num);
-		name_buf[bytes] = '\0';
-		++num;
-	}
-	return strdup(name_buf);
-}
-
 
 static int get_headerinfo(const char* buf, size_t buf_size, HEADERINFO *h) {
 	memset(h, 0, sizeof(HEADERINFO));
@@ -79,7 +49,7 @@ static int get_headerinfo(const char* buf, size_t buf_size, HEADERINFO *h) {
 	memcpy(&h->sha1_included, buf+accum, sizeof(h->sha1_included));
 	accum += sizeof(h->sha1_included);
 
-	h->filename = strdup(buf + accum);
+	h->filename = _strdup(buf + accum);
 	if (!h->filename) { 
 		fprintf(stderr, "Error: extracting file name from header info failed. Bad header?\n");
 		return -1;
@@ -105,7 +75,7 @@ static int consolidate(int out_sockfd, int flag) {
 }
 
 
-static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesize) {
+static int64_t recv_file(int sockfd, NATIVE_FILEHANDLE outfile_fd, int64_t filesize) {
 
 	int64_t total_bytes_processed = 0;	
 
@@ -113,62 +83,35 @@ static int64_t recv_file(int sockfd, int *pipefd, int outfile_fd, int64_t filesi
 
 	if (progress_bar_flag == 1) {
 		p = construct_pstruct(&total_bytes_processed, filesize, &timer, &running);
-		pthread_create(&progress_thread, NULL, progress_callback, (void*)&p);
+		thread_start(&progress_thread, progress_callback, (void*)&p);
 	}
 
 #define JOIN_PROGRESS_THREAD_RETURN(retval) do {\
        	running = 0;\
-	if (progress_bar_flag == 1) pthread_join(progress_thread, NULL);\
+		if (progress_bar_flag == 1) thread_join(&progress_thread);\
        	return (retval); } while(0)
 
+	splice_struct sp;
+	if (splice_struct_construct(&sp) < 0) {
+		return -1;
+	}
+
 	while (total_bytes_processed < filesize && running == 1) {
-//		static const int max_chunksize = 16384;
-		static const int spl_flag = SPLICE_F_MORE | SPLICE_F_MOVE;
-
-		int64_t bytes_recv = 0;
-		int64_t bytes = 0;
-
-		int64_t would_process = filesize - total_bytes_processed;
-	       	int64_t gonna_process = MIN(would_process, CHUNK_SIZE);
-
-		// splice to pipe write head
-		if ((bytes = 
-		splice(sockfd, NULL, pipefd[1], NULL, gonna_process, spl_flag)) <= 0) {
-			if (bytes < 0) {
-				fprintf(stderr, "\nsocket->pipe_write splice returned %lld : %s. (connection aborted by client?)\n", (long long)bytes_recv, strerror(errno));
-
-				JOIN_PROGRESS_THREAD_RETURN(-1);
-			}
-			else {
-				fprintf(stderr, "\nwarning: a 0-byte socket->pipe_write splice has occurred!\n (connection aborted by client?)"); 
-				JOIN_PROGRESS_THREAD_RETURN(-1);
-
-			}
+		int64_t bytes;
+		if ((bytes = splice_from_socket_to_file(sockfd, outfile_fd, &sp, filesize, total_bytes_processed)) < 0) {
+			JOIN_PROGRESS_THREAD_RETURN(-1);
 		}
-		// splice from pipe read head to file fd
-		bytes_recv += bytes;
-
-		int64_t bytes_in_pipe = bytes_recv;
-		int64_t bytes_written = 0;
-
-		while (bytes_in_pipe > 0) {
-			if ((bytes_written = 
-			splice(pipefd[0], NULL, outfile_fd, &total_bytes_processed, bytes_in_pipe, spl_flag)) <= 0) {
-				fprintf(stderr, "\npipe_read->file_fd splice returned %lld: %s\n", (long long)bytes_written, strerror(errno));
-				JOIN_PROGRESS_THREAD_RETURN(-1);
-			}
-			bytes_in_pipe -= bytes_written;
-		}
+		total_bytes_processed += bytes;
 	}
 	if (total_bytes_processed != filesize) {
 		fprintf(stderr, "\nwarning: total_bytes_processed != filesize!\n");
 	}
 	
 	if (progress_bar_flag == 1) {
-		pthread_join(progress_thread, NULL);
+		thread_join(&progress_thread);
 	}
 
-	double seconds = timer.get_us(&timer)/1000000.0;
+	double seconds = timer_get_us(&timer)/1000000.0;
 	double MBs = get_megabytes(total_bytes_processed)/seconds;
 	double percent = 100.0*(double)total_bytes_processed/(double)filesize;
 
@@ -219,15 +162,6 @@ get_answer:
 }
 
 
-
-void signal_handler(int sig) {
-	if (sig == SIGINT) {
-		fprintf(stderr, "\nReceived SIGINT. Aborting.\n");
-		cleanup();
-		exit(2);
-	}
-}
-
 void usage() {
 	fprintf(stderr, "send_file_server usage:  send_file_server [[ OPTIONS ]]\n"\
 			"Options:\n"\
@@ -277,16 +211,14 @@ int main(int argc, char* argv[]) {
 		}
 	}
 	
-	struct sigaction new_action, old_action;
-	new_action.sa_handler = signal_handler;
-	sigemptyset(&new_action.sa_mask);
-	new_action.sa_flags = 0;
-	sigaction(SIGINT, NULL, &old_action);
-	if (old_action.sa_handler != SIG_IGN) {
-		sigaction(SIGINT, &new_action, NULL);
-	}
-
+	setup_signal_handler(signal_handler);
 	struct sockaddr_in local_saddr, remote_saddr;
+
+#ifdef _WIN32
+	if (!init_WSOCK()) {
+		return -1;
+	}
+#endif
 
 	local_sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (local_sockfd < 0) {
@@ -364,13 +296,6 @@ int main(int argc, char* argv[]) {
 			continue;
 		}
 
-		if (pipe(pipefd) < 0) {
-			fprintf(stderr, "pipe() error: %s\n", strerror(errno));
-			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			cleanup();
-			return 1;
-		}
-
 		char *out_name = get_available_filename(h.filename);
 
 		fprintf(stderr, "The client wants to send the file %s (size %.2f MB).\n", h.filename, get_megabytes(h.filesize)); 
@@ -385,16 +310,16 @@ int main(int argc, char* argv[]) {
 		}
 
 		fprintf(stderr, "Writing to output file %s.\n\n", out_name);
-		outfile_fd = open(out_name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+		outfile_fd = open_file_object_wb_native(out_name);
 
-		if (outfile_fd < 0) {
-			fprintf(stderr, "open()ing output file %s failed: %s.\n", out_name, strerror(errno));
-			consolidate(remote_sockfd, HANDSHAKE_FAIL);
-			cleanup();
-			return 1;
+		if (NATIVE_FILEHANDLE_INVALID(outfile_fd)) {
+			free(out_name);
+			reset_state();
+			return -1;
 		}
 
 		free(out_name);
+
 
 		// inform the client program that they can start blasting dat file data
 
@@ -408,7 +333,7 @@ int main(int argc, char* argv[]) {
 		consolidate(remote_sockfd, HANDSHAKE_OK);
 
 		int64_t ret;
-		if ((ret = recv_file(remote_sockfd, pipefd, outfile_fd, h.filesize)) < h.filesize) {
+		if ((ret = recv_file(remote_sockfd, outfile_fd, h.filesize)) != h.filesize) {
 			if (ret < 0) {
 				fprintf(stderr, "\nrecv_file failure.\n");
 			}
@@ -419,7 +344,7 @@ int main(int argc, char* argv[]) {
 			continue;
 		}
 		
-		close(outfile_fd);
+		CLOSE_VALID_FILEHANDLE(outfile_fd);
 
 		if (h.sha1_included && allow_checksum_skip_flag == 0) {
 			fprintf(stderr, "Calculating sha1 sum...\n\n");
