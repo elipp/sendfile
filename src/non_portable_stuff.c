@@ -37,7 +37,7 @@ int init_WSOCK() {
 
 #elif __linux__
 
-void sighandler(int) {
+void sighandler(int sig) {
 	if (sig == SIGINT) {
 		fprintf(stderr, "\nReceived SIGINT. Aborting.\n");
 		cleanup();
@@ -70,12 +70,12 @@ char *get_error_message(DWORD errcode) {
 }
 
 #elif __linux__
-static void thread_start(thread_struct *t, CALLBACK_FUNC cb, void* args) {
-	pthread_create(&progress_thread, NULL, cb, args);
+void thread_start(thread_struct *t, CALLBACK_FUNC cb, void* args) {
+	pthread_create(&t->handle, NULL, cb, args);
 }
 
-static void thread_join(thread_struct *t) {
-	pthread_join(*t, NULL);
+void thread_join(thread_struct *t) {
+	pthread_join(t->handle, NULL);
 }
 #endif
 
@@ -159,7 +159,7 @@ int64_t splice_from_socket_to_file(int sockfd, NATIVE_FILEHANDLE fh, splice_stru
 
 	while (bytes_in_pipe > 0) {
 		if ((bytes_written = 
-		splice(sp->pipefd[0], NULL, fh, &sp->total_bytes_processed, bytes_in_pipe, spl_flag)) <= 0) {
+		splice(sp->pipefd[0], NULL, fh, &total_bytes_processed, bytes_in_pipe, spl_flag)) <= 0) {
 			PRINT_SOCKET_ERROR("splice()");
 			return -1;
 		}
@@ -189,6 +189,7 @@ int64_t send_chunk(int sockfd, NATIVE_FILEHANDLE fh, int64_t gonna_send, int64_t
 }
 #elif __linux__
 int64_t send_chunk(int sockfd, NATIVE_FILEHANDLE fh, int64_t gonna_send, int64_t total_bytes_sent) {
+	int64_t sent_bytes;
 
 	// sendfile should automatically increment the file offset pointer for fh
 	if ((sent_bytes = sendfile(sockfd, fh, NULL, gonna_send)) < gonna_send) {
@@ -291,7 +292,7 @@ char *get_available_filename(const char* orig_filename) {
 		sprintf(filename, "%s(%d)\0", orig_filename, num);
 		++num;
 	}
-	return _strdup(filename);
+	return strdup(filename);
 }
 #endif
 

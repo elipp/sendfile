@@ -1,5 +1,7 @@
 #include "send_file.h"
 
+const int32_t protocol_id = 0x0d355480;
+
 double get_megabytes(int64_t bytes) {
 	return(bytes)/(1048576.0);
 }
@@ -208,7 +210,7 @@ unsigned __stdcall progress_callback(void *progress) {
 	progress_struct *p = (progress_struct*)progress;
 
 	while (*p->cur_bytes < p->total_bytes) {
-		off_t cur_bytes = *p->cur_bytes;
+		int64_t cur_bytes = *p->cur_bytes;
 		int64_t total_bytes = p->total_bytes;
 
 		if (*p->running_flag == 0) {

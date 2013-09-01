@@ -245,8 +245,8 @@ int main(int argc, char* argv[]) {
 	}
 #endif
 
-	char* remote_ipstr = _strdup(argv[optind]);
-	char* filename = _strdup(argv[optind+1]);
+	char* remote_ipstr = strdup(argv[optind]);
+	char* filename = strdup(argv[optind+1]);
 
 	struct sockaddr_in local_saddr, remote_saddr;
 	memset(&local_saddr, 0, sizeof(local_saddr));
@@ -300,9 +300,6 @@ cleanup_and_exit:
 	free(filename);
 
 	cleanup();
-
-	system("pause");
-
 
 	return rval;
 

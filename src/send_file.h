@@ -10,7 +10,8 @@
 #define MAX_HOSTNAME_LEN 255 // arbitrary
 #endif
 
-const int32_t protocol_id = 0x0d355480;
+extern const int32_t protocol_id;
+
 #ifdef _WIN32
 #define CHUNK_SIZE (1024*1024)	// TransmitFile performs a LOT better this way ^_^
 #elif __linux__

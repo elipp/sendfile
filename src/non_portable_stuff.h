@@ -21,6 +21,8 @@
 
 #include "XGetopt.h"
 
+#define strdup _strdup
+
 int init_WSOCK();
 
 #define NATIVE_FILEHANDLE HANDLE
@@ -59,6 +61,10 @@ char *get_error_message(DWORD errcode);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <sys/mman.h>
+#include <sys/sendfile.h>
+#include <sys/stat.h>
 
 #include <ctype.h>
 #include <unistd.h>
@@ -69,6 +75,8 @@ char *get_error_message(DWORD errcode);
 #include <signal.h>
 #include <inttypes.h>
 #include <libgen.h>
+
+#include <pthread.h>
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -92,7 +100,7 @@ typedef struct {
 	int pipefd[2];
 } splice_struct;
 
-typedef void(*) (*CALLBACK_FUNC)(void*);
+typedef void* (*CALLBACK_FUNC)(void*);
 typedef void (*SIGHANDLER_CALLBACK)(int);
 
 #define SLEEP_S(seconds) do { sleep((seconds)); } while(0)

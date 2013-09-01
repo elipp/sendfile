@@ -49,7 +49,7 @@ static int get_headerinfo(const char* buf, size_t buf_size, HEADERINFO *h) {
 	memcpy(&h->sha1_included, buf+accum, sizeof(h->sha1_included));
 	accum += sizeof(h->sha1_included);
 
-	h->filename = _strdup(buf + accum);
+	h->filename = strdup(buf + accum);
 	if (!h->filename) { 
 		fprintf(stderr, "Error: extracting file name from header info failed. Bad header?\n");
 		return -1;
