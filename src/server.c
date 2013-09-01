@@ -240,7 +240,7 @@ int main(int argc, char* argv[]) {
 
 	printf("send_file_server (recipient)\n\n");
 	print_ip_addresses();
-	printf("bind() on port \033[1m%d\033[m.\n", port);
+	printf("bind() on port %d.\n", (int)port);
 	listen(local_sockfd, 5);
 
 	char handshake_buffer[128];

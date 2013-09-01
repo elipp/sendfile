@@ -8,11 +8,12 @@ extern void cleanup();
 BOOL __stdcall sighandler(DWORD param) {
 		switch(param) {
 		 case CTRL_CLOSE_EVENT:
-			 return TRUE;			
+			 fputs("Received CTRL_CLOSE_EVENT, shutting down.\n", stderr);
 			 cleanup();
 			 exit(1);
 			 break;
 		 case CTRL_C_EVENT:
+			 fputs("Received CTRL_C_EVENT, shutting down.\n", stderr);
 			 cleanup();
 			 exit(1);
 			 break;
