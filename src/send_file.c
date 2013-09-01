@@ -82,7 +82,7 @@ unsigned __stdcall fread_ahead(void *args) {
 		s.read_done[i%2] = 1;
 		++i;
 		while (s.read_done[i%2] == 1) {
-			SLEEP_MS(40);
+			SLEEP_MS(25);
 		}
 
 	}
@@ -123,7 +123,7 @@ unsigned char *get_sha1(const char* filename, uint64_t bufsize) {
 	thread_start(&fread_thread, fread_ahead, &s);
 	while (i < num_full_chunks) {
 		while (read_done[i%2] == 0) {
-			SLEEP_MS(40);
+			SLEEP_MS(25);
 		}
 		SHA1_Update(&ctx, s.alternating_buffers[i%2], SHA_HASH_CHUNKSIZE);
 		read_done[i%2] = 0;

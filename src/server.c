@@ -106,8 +106,11 @@ static int64_t recv_file(int sockfd, NATIVE_FILEHANDLE outfile_fd, int64_t files
 	if (total_bytes_processed != filesize) {
 		fputs("\nwarning: total_bytes_processed != filesize!\n", stderr);
 	}
+
+	splice_struct_cleanup(&sp);
 	
 	if (progress_bar_flag == 1) {
+		running = 0;
 		thread_join(&progress_thread);
 	}
 
