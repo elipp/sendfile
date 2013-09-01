@@ -51,7 +51,7 @@ static int get_headerinfo(const char* buf, size_t buf_size, HEADERINFO *h) {
 
 	h->filename = strdup(buf + accum);
 	if (!h->filename) { 
-		fputs("Error: extracting file name from header info failed. Bad header?", stderr);
+		fputs("\nError: extracting file name from header info failed. Bad header?\n", stderr);
 		return -1;
 	}
 	int name_len = strlen(h->filename);
@@ -277,7 +277,7 @@ int main(int argc, char* argv[]) {
 		received_bytes += handshake_len;
 
 		if (validate_protocol_welcome_header(handshake_buffer, handshake_len) < 0) {
-			fputs("warning: validate_protocol_welcome_header failed!", stderr);
+			fputs("\nwarning: validate_protocol_welcome_header failed!\n", stderr);
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
 			reset_state();
 			continue;
@@ -286,14 +286,14 @@ int main(int argc, char* argv[]) {
 		HEADERINFO h;
 
 		if (get_headerinfo(handshake_buffer, handshake_len, &h) < 0) {
-			fputs("error: headerinfo error!", stderr);
+			fputs("\nerror: headerinfo error!\n", stderr);
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
 			reset_state();
 			continue;
 		}
 
 		if (h.sha1_included == 0 && allow_checksum_skip_flag == 0) {
-			fputs("error: client didn't provide a sha1 hash for the input file (-c was used; use -c on the server to allow this). Rejecting.", stderr);
+			fputs("\nerror: client didn't provide a sha1 hash for the input file (-c was used; use -c on the server to allow this). Rejecting.\n", stderr);
 			consolidate(remote_sockfd, HANDSHAKE_CHECKSUM_REQUIRED);
 			reset_state();
 			continue;
@@ -358,11 +358,11 @@ int main(int argc, char* argv[]) {
 				return 1;
 			}
 
-			printf("sha1 sums match! =)\nexpected \t");
+			fputs("sha1 sums match! =)\nexpected \t",stderr);
 			print_sha1(h.sha1);
-			printf(",\ngot \t\t");
+			fputs(",\ngot \t\t",stderr);
 			print_sha1(sha1_received);
-			printf(".\n\n");
+			fputs(".\n\n", stderr);
 
 			free(sha1_received);
 		}

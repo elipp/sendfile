@@ -230,11 +230,11 @@ int main(int argc, char* argv[]) {
 	int num_nonoption_args = argc - optind;
 
 	if (num_nonoption_args > 2) {
-		fputs("send_file client: multiple filenames specified as argument. Sending only one file is supported.", stderr);
+		fputs("send_file client: multiple filenames specified as argument. Sending only one file is supported.\n", stderr);
 		usage();
 		return 1;
 	} else if (num_nonoption_args < 2) {
-		fputs("send_file_client: error: missing either recipient ip or input file.", stderr);
+		fputs("send_file_client: error: missing either recipient ip or input file.\n", stderr);
 		usage();
 		return 1;
 	}
@@ -289,7 +289,7 @@ int main(int argc, char* argv[]) {
 	running = 1;
 
 	if (send_file(filename) < 0) {
-		fputs("send_file failure.", stderr);
+		fputs("\nsend_file failure.\n", stderr);
 		rval = 1;
 		goto cleanup_and_exit;
 	}

@@ -154,7 +154,7 @@ void print_sha1(const unsigned char *sha1) {
 		offset += 2;
 	}
 	tmpbuf[offset+1] = '\0';
-	printf("%s", tmpbuf);
+	fputs(tmpbuf, stderr);
 }
 
 int compare_sha1(const unsigned char* sha1_a, const unsigned char* sha1_b) {
