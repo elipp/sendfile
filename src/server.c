@@ -51,7 +51,7 @@ static int get_headerinfo(const char* buf, size_t buf_size, HEADERINFO *h) {
 
 	h->filename = strdup(buf + accum);
 	if (!h->filename) { 
-		fprintf(stderr, "Error: extracting file name from header info failed. Bad header?\n");
+		fputs("Error: extracting file name from header info failed. Bad header?", stderr);
 		return -1;
 	}
 	int name_len = strlen(h->filename);
@@ -69,9 +69,9 @@ static int consolidate(int out_sockfd, int flag) {
 	memcpy(hacknowledge_buffer+sizeof(protocol_id), &flag, sizeof(flag));	
 	int sent_bytes = send(out_sockfd, hacknowledge_buffer, 8, 0);
 	if (sent_bytes <= 0) { 
-		fprintf(stderr, "consolidate failed (send()): %s\n", strerror(errno));
+		PRINT_SOCKET_ERROR("send()");
 	}
-	return 0;
+	return sent_bytes;
 }
 
 
@@ -104,7 +104,7 @@ static int64_t recv_file(int sockfd, NATIVE_FILEHANDLE outfile_fd, int64_t files
 		total_bytes_processed += bytes;
 	}
 	if (total_bytes_processed != filesize) {
-		fprintf(stderr, "\nwarning: total_bytes_processed != filesize!\n");
+		fputs("\nwarning: total_bytes_processed != filesize!\n", stderr);
 	}
 	
 	if (progress_bar_flag == 1) {
@@ -163,13 +163,13 @@ get_answer:
 
 
 void usage() {
-	fprintf(stderr, "send_file_server usage:  send_file_server [[ OPTIONS ]]\n"\
+	fputs("send_file_server usage:  send_file_server [[ OPTIONS ]]\n"\
 			"Options:\n"\
 		        " -a\t\talways accept transfers\n"\
 			" -b\t\tdisable progress monitoring (default: enabled)\n"\
 		        " -c\t\tallow program to skip checksum verification\n"\
 		        " -p PORTNUM\tspecify port (default 51337)\n"\
-		        " -h\t\tdisplay this help and exit.\n");
+		        " -h\t\tdisplay this help and exit.\n", stderr);
 }
 
 int main(int argc, char* argv[]) {
@@ -179,16 +179,16 @@ int main(int argc, char* argv[]) {
 	while ((c = getopt(argc, argv, "abchp:")) != -1) {
 		switch(c) {
 			case 'a':
-				printf("-a provided -> always accepting file transfers without asking for consent.\n");
+				puts("-a provided -> always accepting file transfers without asking for consent.");
 				always_accept_flag = 1;
 				break;
 			case 'b':
-				printf("-b provided -> progress monitoring disabled.\n");	
+				puts("-b provided -> progress monitoring disabled.");	
 				progress_bar_flag = 0;
 				break;
 
 			case 'c':
-				printf("-c provided -> allowing program to skip checksum verification.\n");
+				puts("-c provided -> allowing program to skip checksum verification.");
 				allow_checksum_skip_flag = 1;
 				break;
 			case 'h':
@@ -222,7 +222,7 @@ int main(int argc, char* argv[]) {
 
 	local_sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (local_sockfd < 0) {
-		fprintf(stderr, "socket() failed: %s\n", strerror(errno));
+		PRINT_SOCKET_ERROR("socket()");
 		return 1;
 	}
 
@@ -234,7 +234,7 @@ int main(int argc, char* argv[]) {
 	local_saddr.sin_port = htons(port);
 
 	if (bind(local_sockfd, (struct sockaddr*) &local_saddr, sizeof(local_saddr)) < 0) {
-		fprintf(stderr, "bind() failed: %s\n", strerror(errno));
+		PRINT_SOCKET_ERROR("bind()");
 		return 1;
 	}
 
@@ -248,12 +248,12 @@ int main(int argc, char* argv[]) {
 	running = 1;
 
 	while (running == 1) {
-		fprintf(stderr, "\nListening for incoming connections.\n");
+		fputs("\nListening for incoming connections.\n", stderr);
 
 		socklen_t remote_saddr_size = sizeof(remote_saddr);
 		remote_sockfd = accept(local_sockfd, (struct sockaddr *) &remote_saddr, &remote_saddr_size);
 		if (remote_sockfd < 0) {
-			fprintf(stderr, "warning: accept() failed: %s\n", strerror(errno));
+			PRINT_SOCKET_ERROR("accept()");
 			reset_state();
 			continue;
 		}
@@ -274,7 +274,7 @@ int main(int argc, char* argv[]) {
 		received_bytes += handshake_len;
 
 		if (validate_protocol_welcome_header(handshake_buffer, handshake_len) < 0) {
-			fprintf(stderr, "warning: validate_protocol_welcome_header failed!\n");
+			fputs("warning: validate_protocol_welcome_header failed!", stderr);
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
 			reset_state();
 			continue;
@@ -283,14 +283,14 @@ int main(int argc, char* argv[]) {
 		HEADERINFO h;
 
 		if (get_headerinfo(handshake_buffer, handshake_len, &h) < 0) {
-			fprintf(stderr, "error: headerinfo error!\n");
+			fputs("error: headerinfo error!", stderr);
 			consolidate(remote_sockfd, HANDSHAKE_FAIL);
 			reset_state();
 			continue;
 		}
 
 		if (h.sha1_included == 0 && allow_checksum_skip_flag == 0) {
-			fprintf(stderr, "error: client didn't provide a sha1 hash for the input file (-c was used; use -c on the server to allow this). Rejecting.\n");
+			fputs("error: client didn't provide a sha1 hash for the input file (-c was used; use -c on the server to allow this). Rejecting.", stderr);
 			consolidate(remote_sockfd, HANDSHAKE_CHECKSUM_REQUIRED);
 			reset_state();
 			continue;
@@ -335,7 +335,7 @@ int main(int argc, char* argv[]) {
 		int64_t ret;
 		if ((ret = recv_file(remote_sockfd, outfile_fd, h.filesize)) != h.filesize) {
 			if (ret < 0) {
-				fprintf(stderr, "\nrecv_file failure.\n");
+				fputs("\nrecv_file failure.\n", stderr);
 			}
 			else {
 				fprintf(stderr, "recv_file: warning: received data size (%lld) is less than expected (%lld)!\n", (long long)ret, (long long)h.filesize);
@@ -347,11 +347,11 @@ int main(int argc, char* argv[]) {
 		CLOSE_VALID_FILEHANDLE(outfile_fd);
 
 		if (h.sha1_included && allow_checksum_skip_flag == 0) {
-			fprintf(stderr, "Calculating sha1 sum...\n\n");
+			fputs("Calculating sha1 sum...\n", stderr);
 			unsigned char* sha1_received = get_sha1(h.filename, h.filesize);
 			
 			if (compare_sha1(h.sha1, sha1_received) < 0) {
-				fprintf(stderr, "WARNING! sha1 mismatch!\n");
+				fputs("WARNING! sha1 mismatch!\n", stderr);
 				return 1;
 			}
 
@@ -364,7 +364,7 @@ int main(int argc, char* argv[]) {
 			free(sha1_received);
 		}
 		else {
-			fprintf(stderr, "(skipping checksum verification)\n\n");
+			fputs("(skipping checksum verification)\n", stderr);
 		}
 		printf("Success.\n");
 

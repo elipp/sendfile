@@ -40,17 +40,17 @@ static int send_file(char* filename) {
 	h.sha1_included = checksum_flag;
 	
 	if (!checksum_flag) {
-		printf("(skipping checksum calculation)\n");
+		puts("(skipping checksum calculation)");
 	}
 	else {
-		printf("Calculating sha1 sum of input file...\n");
+		puts("Calculating sha1 sum of input file...");
 		unsigned char *sha1 = get_sha1(filename, h.filesize);
-		if (!sha1) { fprintf(stderr, "get_sha1 failed!\n"); return -1; }
+		if (!sha1) { fputs("get_sha1 failed!\n", stderr); return -1; }
 		memcpy(h.sha1, sha1, SHA_DIGEST_LENGTH);
 
-		printf("Done! (got ");
+		fputs("Done! (got ", stdout);
 		print_sha1(sha1);
-		printf(").\n\n");
+		puts(").\n");
 
 		free(sha1);
 	}
@@ -81,7 +81,7 @@ static int send_file(char* filename) {
 
 	int received_bytes;
 
-	UNBUFFERED_PRINTF("\nWaiting for remote consent...");
+	fputs("\nWaiting for remote consent...", stderr);
 	received_bytes = recv(local_sockfd, handshake_buffer, 8, 0); 
 	if (received_bytes <= 0) { fprintf(stderr, "recv: blessing length <= 0 (%s)\n", strerror(errno)); return -1; }
 
@@ -92,12 +92,12 @@ static int send_file(char* filename) {
 	memcpy(&handshake_status, handshake_buffer + sizeof(protocol_id), sizeof(handshake_status));
 
 	if (prid != protocol_id) { 
-		fprintf(stderr, "protocol id mismatch!\n"); 
+		fputs("protocol id mismatch!\n", stderr); 
 		return -1; 
 	}
 	switch (handshake_status) {
 		case HANDSHAKE_OK:
-			printf("handshake ok.\n");
+			puts("handshake ok.");
 			break;
 		case HANDSHAKE_FAIL:
 			fprintf(stderr, "received HANDSHAKE_FAIL (%x) from remote. exiting.\n", handshake_status); 
@@ -122,7 +122,7 @@ static int send_file(char* filename) {
 
 	// else we're free to start blasting ze file data
 
-	printf("Starting file transmission.\n");
+	puts("Starting file transmission.");
 	int64_t total_bytes_sent = 0;
 
 	struct _timer timer = timer_construct();
@@ -152,7 +152,7 @@ static int send_file(char* filename) {
 
 	close_file_object_native(fh);
 
-	printf("\nFile transfer successful.\n");
+	puts("\nFile transfer successful.");
 
 	double seconds = timer_get_us(&timer)/1000000.0;
 	double MBs = get_megabytes(total_bytes_sent)/seconds;
@@ -168,12 +168,12 @@ static int send_file(char* filename) {
 }
 
 void usage() {
-	printf("\nsend_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>."\
+	puts("send_file_client: usage: send_file_client [[ options ]] <IPv4 addr> <filename>."\
 	       "\n Options:\n"\
 	       " -b:\t\tdisable progress monitoring (default: on)\n"\
 	       " -c:\t\tskip checksum (sha1) verification (requires server-side support)\n"\
 	       " -p PORT\tspecify remote port\n"\
-	       " -h\t\tdisplay this help and exit.\n\n");
+	       " -h\t\tdisplay this help and exit.");
 }
 
 void cleanup() {
@@ -190,12 +190,12 @@ int main(int argc, char* argv[]) {
 	while ((c = getopt(argc, argv, "bchp:")) != -1) {
 		switch(c) {
 			case 'b':
-				printf("-b provided -> progress monitoring disabled.\n");
+				puts("-b provided -> progress monitoring disabled.");
 				progress_bar_flag = 0;
 				break;
 
 			case 'c':
-				printf("-c provided -> Skipping checksum computation.\n");
+				puts("-c provided -> Skipping checksum computation.");
 				checksum_flag = 0;
 				break;
 
@@ -230,11 +230,11 @@ int main(int argc, char* argv[]) {
 	int num_nonoption_args = argc - optind;
 
 	if (num_nonoption_args > 2) {
-		fprintf(stderr, "send_file client: multiple filenames specified as argument. Sending only one file is supported.\n");
+		fputs("send_file client: multiple filenames specified as argument. Sending only one file is supported.", stderr);
 		usage();
 		return 1;
 	} else if (num_nonoption_args < 2) {
-		fprintf(stderr, "send_file_client: error: missing either recipient ip or input file.\n");
+		fputs("send_file_client: error: missing either recipient ip or input file.", stderr);
 		usage();
 		return 1;
 	}
@@ -280,7 +280,7 @@ int main(int argc, char* argv[]) {
 	}*/
 
 	if (connect(local_sockfd, (struct sockaddr*) &remote_saddr, remote_saddr_len) < 0) {
-		fprintf(stderr, "connect failed: %s\n", strerror(errno));
+		PRINT_SOCKET_ERROR("connect()");
 		rval = 1;
 		goto cleanup_and_exit;
 	}
@@ -289,7 +289,7 @@ int main(int argc, char* argv[]) {
 	running = 1;
 
 	if (send_file(filename) < 0) {
-		fprintf(stderr, "send_file failure.\n");
+		fputs("send_file failure.", stderr);
 		rval = 1;
 		goto cleanup_and_exit;
 	}
